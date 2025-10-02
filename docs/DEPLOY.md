@@ -29,6 +29,15 @@ sudo systemctl restart docker
 ollama pull qwen2.5:7b-instruct
 ```
 
+### Чистая сборка с базовым образом
+Если используете разделённую сборку (`Dockerfile.base` + `backend/Dockerfile`):
+```bash
+# в корне проекта (рядом с Dockerfile.base и requirements.txt)
+docker build -f Dockerfile.base -t legal-ai/backend-base:cu130 . --no-cache
+# затем соберём только backend (использует BASE_IMAGE из compose)
+docker compose build --no-cache backend
+```
+
 **Поднять стек**
 ```
 export DOCKER_BUILDKIT=1
@@ -64,6 +73,15 @@ PY
 ```
 Аналогично можно прогреть и эмбеддер (BGE-M3) — он подтянется при первом ingest/search.
 
+## 3.1 Сеть и фоллбэк HTTPS→HTTP
+В некоторых средах HTTPS из контейнера может быть недоступен. Для диагностики:
+```bash 
+curl -s "http://localhost:8000/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8000/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
+```
+Онлайн-ингест поддерживает автоматический даунгрейд: 
+```bash
+curl -s -X POST http://localhost:8000/rag/fetch_ingest_publication
+```
 ## 4) Режимы старта
 
 **Для быстрого и стабильного запуска используйте «лёгкие» проверки:**
@@ -87,6 +105,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
 - Реранкер: RERANK_KEEP=5, RERANK_BATCH=16 достаточно для RTX 5090.
 - Генерация: max_tokens 256–700 для быстрых ответов.
 - Ингест большого корпуса: грузите батчами по 1–5 тыс. записей.
+- Для онлайн-ингеста используйте /rag/fetch_ingest_publication_batch и concurrency.
 
 ## 6) Безопасность
 - Запускать backend в частной сети Docker; наружу публиковать только 8000 (или за обратным прокси).
@@ -109,6 +128,8 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
 - docker logs -f backend — трассировка старта и запросов.
 
 - Если «висит» первый /analyze — проверьте прогрев HF-кэша реранкера.
+
+- Если /net/check возвращает ConnectTimeout для HTTPS, проверьте сетевые политики Docker/файрволл и используйте allow_http_downgrade: true на время загрузки источников.
 
 ## 9) Оффлайн-развёртывание
 

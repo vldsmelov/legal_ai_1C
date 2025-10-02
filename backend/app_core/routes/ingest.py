@@ -1,13 +1,18 @@
+import re
+
+from pathlib import Path
 from fastapi import APIRouter, Body, HTTPException
-from typing import List
+from typing import List, Optional, Dict, Any
 import httpx, socket, asyncio, time
 from urllib.parse import urlparse, urlunparse
 
 from ..types import IngestItem, IngestPayload  
 from ..config import settings
-from ..rag.store import ingest_items, ensure_collection
 
+from ..rag.store import ingest_items, ensure_collection
 from ..rag.pub_pravo import parse_publication_html
+from ..rag.gk_txt import parse_gk_file
+
 
 router = APIRouter(prefix="/rag")
 
@@ -271,3 +276,63 @@ async def rag_fetch_ingest_publication_batch(
     await asyncio.gather(*(worker(u) for u in urls))
     ok = sum(1 for r in out if r["ok"])
     return {"total": len(urls), "ok": ok, "items": out}
+
+@router.post("/ingest_gk_local")
+def ingest_gk_local(
+    files: Optional[List[str]] = Body(None, embed=True, description="Список путей к txt (от /workspace). Если не задан, берём corpus/gk_rf_p{1..4}.txt"),
+    revision_date: Optional[str] = Body(None, embed=True, description="Дата редакции YYYY-MM-DD, если известна"),
+    act_titles: Optional[Dict[str, str]] = Body(None, embed=True, description="map filename->act_title"),
+    batch_size: int = Body(200, embed=True),
+):
+    """
+    Парсит ГК РФ из локальных txt файлов и грузит в Qdrant.
+    Файл -> часть определяется по имени gk_rf_p{N}.txt (N=1..4), либо по порядку.
+    """
+    root = Path("/workspace")
+    def guess_part_no(fp: Path) -> int:
+        m = re.search(r"gk_rf_p(\d+)\.txt$", fp.name, re.I)
+        return int(m.group(1)) if m else 0
+
+    # 1) Собираем список файлов
+    if not files:
+        candidates = [root / "corpus" / f"gk_rf_p{i}.txt" for i in range(1, 5)]
+        files = [str(p) for p in candidates if p.exists()]
+    if not files:
+        return {"error": "no files provided and default corpus files not found"}
+
+    all_items: List[IngestItem] = []
+    per_file_stats: List[Dict[str, Any]] = []
+
+    for f in files:
+        p = Path(f if f.startswith("/") else str(root / f))
+        if not p.exists():
+            per_file_stats.append({"file": str(p), "parsed": 0, "error": "not found"})
+            continue
+        part_no = guess_part_no(p)
+        title_override = None
+        if act_titles and p.name in act_titles:
+            title_override = act_titles[p.name]
+        elif part_no in (1,2,3,4):
+            title_override = f"Гражданский кодекс РФ (Часть {part_no})"
+
+        try:
+            items = parse_gk_file(p, part_no=part_no or 0, act_title=title_override, revision_date=revision_date)
+            per_file_stats.append({"file": str(p), "parsed": len(items), "part_no": part_no})
+            all_items.extend(items)
+        except Exception as e:
+            per_file_stats.append({"file": str(p), "parsed": 0, "error": str(e)})
+
+    # 2) Заливаем батчами
+    total = 0
+    if all_items:
+        for i in range(0, len(all_items), batch_size):
+            chunk = all_items[i:i+batch_size]
+            res = ingest_items(chunk)
+            total += res.get("ingested", len(chunk))
+
+    return {
+        "files": per_file_stats,
+        "total_ingested": total,
+        "collection": settings.QDRANT_COLLECTION,
+        "note": "local GK ingest finished"
+    }
