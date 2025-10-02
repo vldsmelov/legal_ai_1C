@@ -13,7 +13,9 @@
 - 🎯 **Точный контекст**: кросс-энкодер **bge-reranker-v2-m3** на GPU.
 - ✅ **Скоринг 1–100** + вердикт (`green`/`yellow`/`red`) и краткий фокус-свод.
 - 🧩 Чёткий JSON-ответ с **issues**, **section_scores** и **sources** (цитаты НПА).
-
+- 🌐 **Онлайн-загрузчик**: сетевые проверки (`/net/check`, `/net/fetch`), фоллбэк **HTTPS→HTTP**.
+- 🗂 **Site-aware парсер публикаций**: распознавание структур `Статья/Часть/Пункт` и массовый ingest.
+- ⚙️ Таймауты и производительность: увеличены таймауты на внутренние вызовы анализа (до 300s), reranker и эмбеддер работают на GPU
 ---
 
 ## Структура
@@ -31,10 +33,13 @@ backend/
 │ ├─ rag/embedder.py # BGE-M3 (GPU/CPU auto)
 │ ├─ rag/store.py # Qdrant: ingest/search
 │ ├─ rerank.py # bge-reranker-v2-m3 (GPU)
++│ ├─ rag/html_extract.py # общий HTML→текст парсер + чанкование
++│ ├─ rag/pub_pravo.py # site-aware парсер публикаций (Статья/Часть/Пункт)
 │ └─ routes/
 │ ├─ health.py # GET /health
 │ ├─ ingest.py # POST /rag/ingest(_sample)
 │ └─ analyze.py # POST /analyze, /generate
++│ └─ connectivity.py # GET /net/check, GET /net/fetch
 corpus/
 └─ ru_sample.jsonl # демо-НПА
 ```
@@ -67,6 +72,11 @@ curl -s -X POST http://localhost:8000/analyze \
     "language": "ru",
     "max_tokens": 512
   }' | jq
+
+# 6) Чистая сборка
+docker compose down --remove-orphans
+docker compose build backend
+docker compose up -d
 ```
 
 ---
@@ -101,33 +111,65 @@ curl -s -X POST http://localhost:8000/analyze \
 ---
 
 ## API
-`GET /health`
-
-Краткий статус сервисов (Ollama, Qdrant, коллекция, реранкер).
-
-`POST /rag/ingest_sample`
-
-Грузит corpus/ru_sample.jsonl в Qdrant (детерминированные ID, без дублей).
-
-`POST /rag/ingest`
-
-Ингест переданного массива НПА:
-
+### Сеть / тесты доступа
+#### `GET /net/check`
+Проверка доступности URL (или дефолтного списка). Пример:
 ```
-{ "items": [ { "act_id": "...", "article": "...", "text": "...", "local_ref": "..." }, ... ] }
+GET /net/check?url=http://publication.pravo.gov.ru/
+GET /net/check?check_all=true
+```
+Ответ содержит `ok`, `status`, `error`, `elapsed_ms`, `final_url`.
+
+#### `GET /net/fetch`
+Стримовый fetch HTML/текста с лимитом байт и превью. Пример:
+```
+GET /net/fetch?url=http://publication.pravo.gov.ru/&max_bytes=500000
+```
+Возвращает `status`, `bytes`, `sha256`, `content_type`, `saved_path`, `preview_text`.
+
+### `GET /health`
+Краткий статус сервисов.
+
+### `POST /rag/ingest`
+Грузит переданный JSONL-массив записей.
+
+### Онлайн-ингест (HTML → структурные записи)
+#### `POST /rag/fetch_ingest`
+
+Универсальный загрузчик: скачивает HTML, очищает, чанкит и грузит в Qdrant. Поля:
+```json
+{ "url": "<страница>", "max_bytes": 1500000, "timeout": 12, "allow_http_downgrade": true }
+``
+
+#### `POST /rag/fetch_ingest_publication`
+Site-aware парсер страниц публикаций: пытается распознать `Статья/Часть/Пункт`, извлекает `title`, `revision_date`, формирует `local_ref` вида `...#artN/chM/ptK`.
+```json
+{ "url": "<страница акта>", "allow_http_downgrade": true, "max_bytes": 1800000, "timeout": 12 }
 ```
 
----
+#### `POST /rag/fetch_ingest_publication_batch`
+Пакетная версия с параллелизмом:
+```json
+{
+  "urls": ["http://...","http://..."],
+  "timeout": 12, "max_bytes": 1800000,
+  "allow_http_downgrade": true, "concurrency": 4
+}
+```
+
 
 ## Смоук-примеры
 
-- Висит `/analyze` при первом вызове — не прогрет реранкер. Прогрейте HF-кэш (см. DEPLOY) или временно `RERANK_ENABLE=0`.
-
-- Ошибка `vectors|vectors_config` — несовместимость клиентов Qdrant, в коде есть try/except. При смене размерности дропните коллекцию и перезагрузите.
-
-- Дубли в **sources** — в ответе есть **dedup**; при ingest ID детерминированные → апсерт.
+- **Онлайн-ингест (пример):**
+```bash
+curl -s -X POST http://localhost:8000/rag/fetch_ingest_publication \
+  -H "Content-Type: application/json" \
+  -d '{"url":"http://publication.pravo.gov.ru/Document/View/<ID>?format=HTML","allow_http_downgrade":true}'
+```
+В ответе: `ingested`, `title`, `revision_date`, `items`, `final_url`.
 
 ---
+
 ## Лицензии / Примечания
 
 - BGE (BAAI) — см. лицензию BAAI. Qdrant — Apache-2.0.

@@ -74,7 +74,7 @@ services:
       - EMBEDDING_MODEL=${EMBEDDING_MODEL}
       - RAG_TOP_K=${RAG_TOP_K}
       - EMBED_DEVICE=auto
-      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+      - PYTORCH_ALLOC_CONF=max_split_size_mb:256,expandable_segments:True
       # настройки стартовых проверок (выполнятся в app.startup)
       - STARTUP_CHECKS=1
       - STARTUP_CUDA_NAME=0      # имя GPU можно включать позже
@@ -89,6 +89,9 @@ services:
       - RERANK_KEEP=5               # сколько оставить после rerank из топ-K
       - RERANK_BATCH=16             # батч скоринга
       - RERANK_DEBUG=0              # 1 = печатать скоры в логи
+      # Net-tests
+      - NET_TEST_URLS=https://publication.pravo.gov.ru/,https://pravo.gov.ru/,https://docs.cntd.ru/
+
     depends_on:
       ollama:
         condition: service_healthy

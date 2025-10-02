@@ -2,8 +2,12 @@ fastapi
 uvicorn[standard]
 httpx
 pydantic>=2
+numpy
+
 qdrant-client
 sentence-transformers
-numpy
 FlagEmbedding
 transformers
+
+selectolax
+watchfiles
