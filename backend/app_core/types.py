@@ -68,10 +68,10 @@ class IngestItem(BaseModel):
     article: Optional[str] = None
     part: Optional[str] = None
     point: Optional[str] = None
-    revision_date: Optional[str] = None
+    revision_date: Optional[str] = None  # формат YYYY-MM-DD, если есть
     jurisdiction: str = "RU"
     text: str
-    local_ref: Optional[str] = None
+    local_ref: str
 
 class IngestPayload(BaseModel):
-    items: List[IngestItem]
+    items: List[IngestItem] = Field(default_factory=list)
