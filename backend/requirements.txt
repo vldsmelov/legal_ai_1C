@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+httpx
+pydantic>=2
+qdrant-client
+sentence-transformers
+numpy
+FlagEmbedding
+transformers

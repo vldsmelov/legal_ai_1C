@@ -1,0 +1,11 @@
+.git
+.gitignore
+.devcontainer
+.venv
+__pycache__
+*.pyc
+.ollama
+.hf_cache
+corpus/*.pdf
+data
+models

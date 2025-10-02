@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.dist/
+.build/
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# Venv
+venv/
+.venv/
+.env
+.env.*
+.python-version
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Hugging Face cache & artifacts
+.hf_cache/
+cache/
+*checkpoint*/
+*.safetensors
+*.bin
+*.pt
+
+# Data / indices / volumes (локальные)
+data/
+logs/
+.qdrant/
+.qdrant_snapshot/
+
+# Node (на будущее)
+node_modules/
+
+# Compose overrides
+docker-compose.override.yml
+
+# Corpus: коммитим только маленький пример
+corpus/*
+!corpus/ru_sample.jsonl

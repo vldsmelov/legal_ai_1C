@@ -1,0 +1,31 @@
+{
+  "name": "legal-ai-dev",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "backend",
+  "runServices": ["ollama", "qdrant", "ollama-pull", "backend"],
+  "workspaceFolder": "/workspace",
+  "overrideCommand": false,
+  "waitFor": "container",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-docker",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "humao.rest-client"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "OLLAMA_BASE_URL": "http://ollama:11434",
+    "OLLAMA_MODEL": "qwen2.5:7b-instruct",
+    "QDRANT_URL": "http://qdrant:6333",
+    "QDRANT_COLLECTION": "ru_law_m3",
+    "EMBEDDING_MODEL": "BAAI/bge-m3",
+    "RAG_TOP_K": "8",
+    "EMBED_DEVICE": "auto"
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
+  ]
+}
