@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from .routes.health import router as health_router
 from .routes.ingest import router as ingest_router
 from .routes.analyze import router as analyze_router
+from .routes.connectivity import router as net_router
 from .startup import register_startup
 
 def create_app() -> FastAPI:
@@ -9,5 +10,6 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(ingest_router)
     app.include_router(analyze_router)
+    app.include_router(net_router)
     register_startup(app)  # лёгкие startup-проверки
     return app

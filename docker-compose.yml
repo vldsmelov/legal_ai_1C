@@ -89,6 +89,9 @@ services:
       - RERANK_KEEP=5               # сколько оставить после rerank из топ-K
       - RERANK_BATCH=16             # батч скоринга
       - RERANK_DEBUG=0              # 1 = печатать скоры в логи
+      # Net-tests
+      - NET_TEST_URLS=https://publication.pravo.gov.ru/,https://pravo.gov.ru/,https://docs.cntd.ru/
+
     depends_on:
       ollama:
         condition: service_healthy
