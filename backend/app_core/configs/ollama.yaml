@@ -1,0 +1,2 @@
+url: "http://ollama:11434"
+model: "qwen2.5:7b-instruct"

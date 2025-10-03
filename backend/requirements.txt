@@ -7,3 +7,4 @@ sentence-transformers
 numpy
 FlagEmbedding
 transformers
+pyyaml
