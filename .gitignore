@@ -37,6 +37,8 @@ cache/
 # Data / indices / volumes (локальные)
 data/
 logs/
+samples/
+reports/
 .qdrant/
 .qdrant_snapshot/
 
