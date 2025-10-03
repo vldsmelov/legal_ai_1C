@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from ..types import GenerateRequest, AnalyzeRequest, AnalyzeResponse, SectionScore, SourceItem
 from ..config import settings
 from ..llm.ollama import ollama_generate, ollama_chat_json
+from ..prompts import get_prompt_template, render_prompt
 from ..rag.store import rag_search_ru
 from ..rerank import apply_rerank
 from ..scoring import SECTION_DEFS, SECTION_INDEX, compute_total_and_color, build_focus, sections_lines
@@ -10,41 +11,43 @@ from ..utils import dedup_sources_by_hash
 
 router = APIRouter()
 
+
 def system_prompt(req: AnalyzeRequest) -> str:
     extra_rule = ""
     if settings.SCORING_MODE == "lenient":
-        extra_rule = "- Если раздел упомянут, но не детализирован — ставь 2–3 (а не 0).\n"
-    return f"""
-Ты — ИИ-юрист. Сначала выставь оценки 0..5 по фиксированным разделам и кратко опиши проблемы.
-Юрисдикция: {req.jurisdiction} (используй именно российское право). Тип договора: {req.contract_type or "не указан"}. Язык: {req.language}.
-Верни СТРОГО JSON по схеме:
-{{
-  "sections":[{{"key":"parties","raw":0,"comment":""}}, ... все ключи ...],
-  "summary":"",
-  "issues":[{{"section":"ip","severity":"high","text":"","suggestion":""}}, ...]
-}}
-Ключи (используй ровно их, без добавления новых):
-{sections_lines()}
+        extra_rule = get_prompt_template("analyze_system_lenient_rule").strip()
+        if extra_rule:
+            extra_rule = f"{extra_rule}\n"
+    return render_prompt(
+        "analyze_system",
+        jurisdiction=req.jurisdiction,
+        contract_type=req.contract_type or "не указан",
+        language=req.language,
+        sections=sections_lines(),
+        extra_rule=extra_rule,
+    ).strip()
 
-Правила:
-- 0 — нет/противоречиво, 1 — слабое, 2 — ниже нормы, 3 — удовлетворительно, 4 — хорошо, 5 — best practice.
-- Если данных мало — ставь 0..1 и поясняй в comment.
-{extra_rule}- Источники и цитаты бери ТОЛЬКО из предоставленного контекста — если контекст пуст/неподходящ, не ссылайся.
-- НИКАКОГО текста вне JSON.
-""".strip()
 
 def user_prompt(req: AnalyzeRequest, ctx: List[SourceItem]) -> str:
-    lines = []
+    context_lines: List[str] = []
     if ctx:
-        lines.append("=== КОНТЕКСТ НОРМ (РФ) — используй ТОЛЬКО это для ссылок ===")
+        context_lines.append("=== КОНТЕКСТ НОРМ (РФ) — используй ТОЛЬКО это для ссылок ===")
         for i, s in enumerate(ctx, 1):
-            cite = f'{s.act_title}, ст. {s.article}' if s.article else s.act_title
+            cite = f"{s.act_title}, ст. {s.article}" if s.article else s.act_title
             rd = f" (ред. {s.revision_date})" if s.revision_date else ""
-            lines.append(f"[{i}] {cite}{rd}: {s.text}")
-        lines.append("=== КОНЕЦ КОНТЕКСТА ===")
-    lines.append("=== ТЕКСТ ДОГОВОРА ===")
-    lines.append(req.contract_text)
-    return "\n".join(lines)
+            context_lines.append(f"[{i}] {cite}{rd}: {s.text}")
+        context_lines.append("=== КОНЕЦ КОНТЕКСТА ===")
+        context_lines.append("")
+    context_block = "\n".join(context_lines)
+    if context_block:
+        context_block = context_block + "\n"
+    prompt_text = render_prompt(
+        "analyze_user",
+        context_block=context_block,
+        contract_text=req.contract_text,
+    )
+    return prompt_text
+
 
 @router.post("/generate")
 async def generate(body: GenerateRequest):
@@ -53,6 +56,7 @@ async def generate(body: GenerateRequest):
         return {"model": body.model or settings.OLLAMA_MODEL, "text": text}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
@@ -85,8 +89,10 @@ async def analyze(req: AnalyzeRequest):
         if raw_item is None:
             sections_in.append(SectionScore(key=sdef["key"], raw=0, comment="не найдено"))
         else:
-            try: raw_val = int(raw_item.get("raw", 0))
-            except Exception: raw_val = 0
+            try:
+                raw_val = int(raw_item.get("raw", 0))
+            except Exception:
+                raw_val = 0
             raw_val = max(0, min(5, raw_val))
             sections_in.append(SectionScore(key=sdef["key"], raw=raw_val, comment=(raw_item.get("comment") or "")[:2000]))
 
@@ -101,7 +107,7 @@ async def analyze(req: AnalyzeRequest):
         if section_key not in SECTION_INDEX:
             section_key = "scope"
         sev = it.get("severity", "medium")
-        if sev not in ("high","medium","low"):
+        if sev not in ("high", "medium", "low"):
             sev = "medium"
         text = (it.get("text") or "").strip()
         suggestion = (it.get("suggestion") or "").strip() or None
@@ -112,8 +118,15 @@ async def analyze(req: AnalyzeRequest):
     summary = (parsed.get("summary") or "").strip() or "Автоматическая предварительная оценка; источники из локальной базы РФ (если найдены)."
 
     return AnalyzeResponse(
-        score_total=score_total, score_text=score_text, verdict=verdict,
-        risk_color=color, summary=summary, focus_summary=focus_summary,
-        top_focus=top_focus, jurisdiction=req.jurisdiction, issues=issues,
-        section_scores=section_table, sources=ctx
+        score_total=score_total,
+        score_text=score_text,
+        verdict=verdict,
+        risk_color=color,
+        summary=summary,
+        focus_summary=focus_summary,
+        top_focus=top_focus,
+        jurisdiction=req.jurisdiction,
+        issues=issues,
+        section_scores=section_table,
+        sources=ctx,
     )
