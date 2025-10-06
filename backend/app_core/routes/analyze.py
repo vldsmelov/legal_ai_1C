@@ -1,18 +1,33 @@
-from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
+
+from fastapi import APIRouter, HTTPException
+
 from ..types import GenerateRequest, AnalyzeRequest, AnalyzeResponse, SectionScore, SourceItem
 from ..config import settings
 from ..llm.ollama import ollama_generate, ollama_chat_json
 from ..prompts import get_prompt_template, render_prompt
 from ..rag.store import rag_search_ru
 from ..rerank import apply_rerank
-from ..scoring import SECTION_DEFS, SECTION_INDEX, compute_total_and_color, build_focus, sections_lines
+from ..scoring import (
+    SECTION_DEFS,
+    SECTION_INDEX,
+    compute_total_and_color,
+    build_focus,
+    sections_lines,
+)
 from ..utils import dedup_sources_by_hash
 
 router = APIRouter()
 
+DEFAULT_LAW_SUMMARY = (
+    "Автоматическая предварительная оценка соответствия законодательству; требуется проверка юристом."
+)
+DEFAULT_BUSINESS_SUMMARY = (
+    "Автоматическая оценка бизнес-логики и рисков для компании; результаты стоит перепроверить специалистами."
+)
 
-def system_prompt(req: AnalyzeRequest) -> str:
+
+def law_system_prompt(req: AnalyzeRequest) -> str:
     extra_rule = ""
     if settings.SCORING_MODE == "lenient":
         extra_rule = get_prompt_template("analyze_system_lenient_rule").strip()
@@ -28,7 +43,7 @@ def system_prompt(req: AnalyzeRequest) -> str:
     ).strip()
 
 
-def user_prompt(req: AnalyzeRequest, ctx: List[SourceItem]) -> str:
+def law_user_prompt(req: AnalyzeRequest, ctx: List[SourceItem]) -> str:
     context_lines: List[str] = []
     if ctx:
         context_lines.append("=== КОНТЕКСТ НОРМ (РФ) — используй ТОЛЬКО это для ссылок ===")
@@ -49,40 +64,20 @@ def user_prompt(req: AnalyzeRequest, ctx: List[SourceItem]) -> str:
     return prompt_text
 
 
-@router.post("/generate")
-async def generate(body: GenerateRequest):
-    try:
-        text = await ollama_generate(body.prompt, body.max_tokens or 512, body.model)
-        return {"model": body.model or settings.OLLAMA_MODEL, "text": text}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+def business_system_prompt(req: AnalyzeRequest) -> str:
+    return render_prompt(
+        "business_system",
+        contract_type=req.contract_type or "не указан",
+        language=req.language,
+        sections=sections_lines(),
+    ).strip()
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest):
-    # 1) RAG
-    try:
-        ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
-    except Exception:
-        ctx = []
-    ctx = dedup_sources_by_hash(ctx)
-    # 1.1) rerank
-    try:
-        keep = min(settings.RERANK_KEEP, len(ctx))
-        ctx = apply_rerank(req.contract_text, ctx, keep=keep)
-        ctx = dedup_sources_by_hash(ctx)
-    except Exception as e:
-        print("[RERANK] failed:", e)
+def business_user_prompt(req: AnalyzeRequest) -> str:
+    return render_prompt("business_user", contract_text=req.contract_text)
 
-    # 2) LLM
-    sys = system_prompt(req)
-    usr = user_prompt(req, ctx)
-    try:
-        parsed = await ollama_chat_json(sys, usr, req.model, max_tokens=req.max_tokens or 1024)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
 
-    # 3) Нормализация
+def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]:
     sections_in: List[SectionScore] = []
     for sdef in SECTION_DEFS:
         raw_item = next((c for c in (parsed.get("sections") or []) if c.get("key") == sdef["key"]), None)
@@ -94,10 +89,22 @@ async def analyze(req: AnalyzeRequest):
             except Exception:
                 raw_val = 0
             raw_val = max(0, min(5, raw_val))
-            sections_in.append(SectionScore(key=sdef["key"], raw=raw_val, comment=(raw_item.get("comment") or "")[:2000]))
+            sections_in.append(
+                SectionScore(
+                    key=sdef["key"],
+                    raw=raw_val,
+                    comment=(raw_item.get("comment") or "")[:2000],
+                )
+            )
 
     score_total, color, section_table = compute_total_and_color(sections_in)
-    verdict = "ok" if score_total >= settings.SCORE_GREEN else "needs_review" if score_total >= settings.SCORE_YELLOW else "high_risk"
+    verdict = (
+        "ok"
+        if score_total >= settings.SCORE_GREEN
+        else "needs_review"
+        if score_total >= settings.SCORE_YELLOW
+        else "high_risk"
+    )
     score_text = f"{score_total}/100 ({color})"
 
     issues_raw = parsed.get("issues") or []
@@ -112,21 +119,95 @@ async def analyze(req: AnalyzeRequest):
         text = (it.get("text") or "").strip()
         suggestion = (it.get("suggestion") or "").strip() or None
         if text:
-            issues.append({"section": section_key, "severity": sev, "text": text, "suggestion": suggestion})
+            issues.append(
+                {
+                    "section": section_key,
+                    "severity": sev,
+                    "text": text,
+                    "suggestion": suggestion,
+                }
+            )
 
     focus_summary, top_focus = build_focus(section_table, issues)
-    summary = (parsed.get("summary") or "").strip() or "Автоматическая предварительная оценка; источники из локальной базы РФ (если найдены)."
+    summary = (parsed.get("summary") or "").strip() or default_summary
+
+    return {
+        "score_total": score_total,
+        "score_text": score_text,
+        "verdict": verdict,
+        "risk_color": color,
+        "summary": summary,
+        "focus_summary": focus_summary,
+        "top_focus": top_focus,
+        "issues": issues,
+        "section_scores": section_table,
+    }
+
+
+@router.post("/generate")
+async def generate(body: GenerateRequest):
+    try:
+        text = await ollama_generate(body.prompt, body.max_tokens or 512, body.model)
+        return {"model": body.model or settings.OLLAMA_MODEL, "text": text}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest):
+    # 1) RAG — проверка по законодательству
+    try:
+        ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
+    except Exception:
+        ctx = []
+    ctx = dedup_sources_by_hash(ctx)
+    # 1.1) rerank
+    try:
+        keep = min(settings.RERANK_KEEP, len(ctx))
+        ctx = apply_rerank(req.contract_text, ctx, keep=keep)
+        ctx = dedup_sources_by_hash(ctx)
+    except Exception as e:
+        print("[RERANK] failed:", e)
+
+    # 2) LLM — юридическая оценка с контекстом RAG
+    sys = law_system_prompt(req)
+    usr = law_user_prompt(req, ctx)
+    try:
+        law_parsed = await ollama_chat_json(sys, usr, req.model, max_tokens=req.max_tokens or 1024)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+
+    law_report = build_report(law_parsed, DEFAULT_LAW_SUMMARY)
+
+    # 3) LLM — бизнес-риски без RAG
+    biz_sys = business_system_prompt(req)
+    biz_usr = business_user_prompt(req)
+    try:
+        business_parsed = await ollama_chat_json(biz_sys, biz_usr, req.model, max_tokens=req.max_tokens or 1024)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+
+    business_report = build_report(business_parsed, DEFAULT_BUSINESS_SUMMARY)
 
     return AnalyzeResponse(
-        score_total=score_total,
-        score_text=score_text,
-        verdict=verdict,
-        risk_color=color,
-        summary=summary,
-        focus_summary=focus_summary,
-        top_focus=top_focus,
+        score_total=law_report["score_total"],
+        score_text=law_report["score_text"],
+        verdict=law_report["verdict"],
+        risk_color=law_report["risk_color"],
+        summary=law_report["summary"],
+        focus_summary=law_report["focus_summary"],
+        top_focus=law_report["top_focus"],
         jurisdiction=req.jurisdiction,
-        issues=issues,
-        section_scores=section_table,
+        issues=law_report["issues"],
+        section_scores=law_report["section_scores"],
         sources=ctx,
+        business_score_total=business_report["score_total"],
+        business_score_text=business_report["score_text"],
+        business_verdict=business_report["verdict"],
+        business_risk_color=business_report["risk_color"],
+        business_summary=business_report["summary"],
+        business_focus_summary=business_report["focus_summary"],
+        business_top_focus=business_report["top_focus"],
+        business_issues=business_report["issues"],
+        business_section_scores=business_report["section_scores"],
     )

@@ -99,6 +99,8 @@ class Settings:
             "analyze_system_lenient_rule": prompts_cfg.get(
                 "analyze_system_lenient_rule", "analyze_system_lenient_rule.txt"
             ),
+            "business_system": prompts_cfg.get("business_system", "business_system.txt"),
+            "business_user": prompts_cfg.get("business_user", "business_user.txt"),
         }
 
 
