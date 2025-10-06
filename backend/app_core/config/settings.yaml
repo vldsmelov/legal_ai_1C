@@ -33,3 +33,5 @@ prompts:
   analyze_system: analyze_system.txt
   analyze_user: analyze_user.txt
   analyze_system_lenient_rule: analyze_system_lenient_rule.txt
+  business_system: business_system.txt
+  business_user: business_user.txt

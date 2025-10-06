@@ -60,6 +60,15 @@ class AnalyzeResponse(BaseModel):
     issues: List[Issue]
     section_scores: List[Dict[str, Any]]
     sources: List[SourceItem]
+    business_score_total: int
+    business_score_text: str
+    business_verdict: str
+    business_risk_color: str
+    business_summary: str
+    business_focus_summary: str
+    business_top_focus: List[FocusItem]
+    business_issues: List[Issue]
+    business_section_scores: List[Dict[str, Any]]
 
 # Ingest
 class IngestItem(BaseModel):
