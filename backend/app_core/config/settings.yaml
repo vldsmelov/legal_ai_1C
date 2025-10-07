@@ -27,6 +27,8 @@ scoring:
   mode: strict
   score_green: 75
   score_yellow: 51
+  business_max_tokens: 1400
+  business_retry_step: 400
 
 prompts:
   dir: prompts

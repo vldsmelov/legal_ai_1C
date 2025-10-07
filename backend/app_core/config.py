@@ -82,6 +82,18 @@ class Settings:
         self.SCORE_GREEN = int(score_green_env) if score_green_env is not None else int(scoring_cfg.get("score_green", 75))
         score_yellow_env = os.getenv("SCORE_YELLOW")
         self.SCORE_YELLOW = int(score_yellow_env) if score_yellow_env is not None else int(scoring_cfg.get("score_yellow", 51))
+        business_max_tokens_env = os.getenv("BUSINESS_MAX_TOKENS")
+        self.BUSINESS_MAX_TOKENS = (
+            int(business_max_tokens_env)
+            if business_max_tokens_env is not None
+            else int(scoring_cfg.get("business_max_tokens", 1400))
+        )
+        business_retry_env = os.getenv("BUSINESS_RETRY_STEP")
+        self.BUSINESS_RETRY_STEP = (
+            int(business_retry_env)
+            if business_retry_env is not None
+            else int(scoring_cfg.get("business_retry_step", 400))
+        )
 
         # Prompts configuration
         prompt_dir_env = os.getenv("PROMPTS_DIR")

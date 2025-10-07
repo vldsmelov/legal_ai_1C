@@ -11,6 +11,7 @@ from ..rerank import apply_rerank
 from ..scoring import (
     SECTION_DEFS,
     SECTION_INDEX,
+    SECTION_KEYS,
     compute_total_and_color,
     build_focus,
     sections_lines,
@@ -77,12 +78,47 @@ def business_user_prompt(req: AnalyzeRequest) -> str:
     return render_prompt("business_user", contract_text=req.contract_text)
 
 
+def _has_all_sections(payload: Dict[str, Any]) -> bool:
+    sections = payload.get("sections")
+    if not isinstance(sections, list):
+        return False
+    keys = {item.get("key") for item in sections if isinstance(item, dict) and item.get("key")}
+    return SECTION_KEYS.issubset(keys)
+
+
+async def _call_business_model(req: AnalyzeRequest, max_tokens: int) -> Dict[str, Any]:
+    biz_sys = business_system_prompt(req)
+    biz_usr = business_user_prompt(req)
+    return await ollama_chat_json(biz_sys, biz_usr, req.model, max_tokens=max_tokens)
+
+
+async def _generate_business_payload(req: AnalyzeRequest) -> Dict[str, Any]:
+    attempts: List[int] = []
+    base = req.max_tokens or settings.BUSINESS_MAX_TOKENS
+    attempts.append(max(base, 512))
+    # Добавляем запас, если модель урезала ответ
+    attempts.append(max(base + settings.BUSINESS_RETRY_STEP, base))
+
+    last_payload: Dict[str, Any] = {}
+    for tokens in attempts:
+        try:
+            payload = await _call_business_model(req, tokens)
+        except Exception:
+            continue
+        if _has_all_sections(payload):
+            return payload
+        last_payload = payload or {}
+    return last_payload
+
+
 def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]:
     sections_in: List[SectionScore] = []
+    missing_keys: List[str] = []
     for sdef in SECTION_DEFS:
         raw_item = next((c for c in (parsed.get("sections") or []) if c.get("key") == sdef["key"]), None)
         if raw_item is None:
             sections_in.append(SectionScore(key=sdef["key"], raw=0, comment="не найдено"))
+            missing_keys.append(sdef["key"])
         else:
             try:
                 raw_val = int(raw_item.get("raw", 0))
@@ -130,6 +166,12 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
 
     focus_summary, top_focus = build_focus(section_table, issues)
     summary = (parsed.get("summary") or "").strip() or default_summary
+    if len(missing_keys) == len(SECTION_DEFS):
+        summary = (
+            "Модель не смогла сформировать оценки по бизнес-рискам; повторите анализ или обновите промпт."
+        )
+        focus_summary = "Бизнес-анализ не сформирован из-за ошибки генерации."
+        top_focus = []
 
     return {
         "score_total": score_total,
@@ -180,10 +222,8 @@ async def analyze(req: AnalyzeRequest):
     law_report = build_report(law_parsed, DEFAULT_LAW_SUMMARY)
 
     # 3) LLM — бизнес-риски без RAG
-    biz_sys = business_system_prompt(req)
-    biz_usr = business_user_prompt(req)
     try:
-        business_parsed = await ollama_chat_json(biz_sys, biz_usr, req.model, max_tokens=req.max_tokens or 1024)
+        business_parsed = await _generate_business_payload(req)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
 
