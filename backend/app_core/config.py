@@ -113,6 +113,8 @@ class Settings:
             ),
             "business_system": prompts_cfg.get("business_system", "business_system.txt"),
             "business_user": prompts_cfg.get("business_user", "business_user.txt"),
+            "overview_system": prompts_cfg.get("overview_system", "overview_system.txt"),
+            "overview_user": prompts_cfg.get("overview_user", "overview_user.txt"),
         }
 
 

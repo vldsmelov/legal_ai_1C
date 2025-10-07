@@ -95,73 +95,42 @@ def _normalize_items(items: List[Any]) -> List[Dict[str, Any]]:
     return result
 
 
-def _analysis_cards(
-    title: str,
-    data: Dict[str, Any],
-    *,
-    compact_block: str = "",
-    include_sources: bool = False,
-    sources: List[Dict[str, Any]] | None = None,
-) -> str:
-    summary = data.get("summary") or ""
-    focus_summary = data.get("focus_summary") or ""
-    top_focus = _normalize_items(data.get("top_focus") or [])
-    tf = []
-    for f in top_focus[:5]:
-        tf.append(
-            f"<li><b>{_escape(f.get('title'))}</b> — {_escape(f.get('why'))} <i style='color:#6b7280'>({_escape(f.get('suggestion') or '')})</i></li>"
+def _normalize_dict(item: Any) -> Dict[str, Any]:
+    if hasattr(item, "dict"):
+        try:
+            return item.dict()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    if isinstance(item, dict):
+        return item
+    return {}
+
+
+def _bullet_list(items: List[Any], empty_text: str) -> str:
+    values: List[str] = []
+    for raw in items or []:
+        text = str(raw).strip()
+        if text:
+            values.append(text)
+    if not values:
+        return f'<p style="color:#6b7280">{_escape(empty_text)}</p>'
+    lis = [f"<li>{_escape(text)}</li>" for text in values]
+    return "<ul>" + "\n".join(lis) + "</ul>"
+
+
+def _focus_list(top_focus: List[Dict[str, Any]]) -> str:
+    items = []
+    for f in _normalize_items(top_focus)[:5]:
+        title = f.get("title") or f.get("key")
+        why = f.get("why") or ""
+        suggestion = f.get("suggestion") or ""
+        extra = f" <i style='color:#6b7280'>({_escape(suggestion)})</i>" if suggestion else ""
+        items.append(
+            f"<li><b>{_escape(title)}</b> — {_escape(why)}{extra}</li>"
         )
-    top_focus_html = "<ul>" + "\n".join(tf) + "</ul>" if tf else '<p style="color:#6b7280">—</p>'
-    section_scores = data.get("section_scores") or []
-    issues = data.get("issues") or []
-
-    blocks = [
-        f"""
-      <div class=\"card\">
-        <h2>{_escape(title)} — краткое резюме</h2>
-        <p>{_escape(summary)}</p>
-        <p style=\"color:#374151\">{_escape(focus_summary)}</p>
-        {compact_block}
-      </div>""",
-        f"""
-      <div class=\"card\">
-        <h2>{_escape(title)} — зоны внимания</h2>
-        {top_focus_html}
-      </div>""",
-        f"""
-      <div class=\"card\">
-        <h2>{_escape(title)} — секции и баллы</h2>
-        <table style=\"width:100%;border-collapse:collapse\">
-          <thead>
-            <tr>
-              <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Раздел</th>
-              <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Баллы</th>
-              <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd;width:240px\">Уровень</th>
-              <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Комментарий</th>
-            </tr>
-          </thead>
-          <tbody>
-            {_section_rows(section_scores)}
-          </tbody>
-        </table>
-      </div>""",
-        f"""
-      <div class=\"card\">
-        <h2>{_escape(title)} — замечания и рекомендации</h2>
-        {_issues_list(issues)}
-      </div>""",
-    ]
-
-    if include_sources:
-        blocks.append(
-            f"""
-      <div class=\"card\">
-        <h2>Нормативные источники (локальная база)</h2>
-        {_sources_list(sources or [])}
-      </div>"""
-        )
-
-    return "\n".join(blocks)
+    if not items:
+        return '<p style="color:#6b7280">—</p>'
+    return "<ul>" + "\n".join(items) + "</ul>"
 
 
 def render_html(meta: Dict[str, Any], analysis: Dict[str, Any]) -> str:
@@ -184,6 +153,15 @@ def render_html(meta: Dict[str, Any], analysis: Dict[str, Any]) -> str:
     business_block = _block("business")
     sources = analysis.get("sources") or []
 
+    overview_data = _normalize_dict(analysis.get("overview") or {})
+    law_narrative = _normalize_dict(analysis.get("law_narrative") or {})
+    business_narrative = _normalize_dict(analysis.get("business_narrative") or {})
+
+    overview_summary = overview_data.get("summary") or analysis.get("overview_summary") or ""
+    overview_parties = overview_data.get("parties") or analysis.get("overview_parties") or ""
+    overview_subject = overview_data.get("subject") or analysis.get("overview_subject") or ""
+    overview_highlights_raw = overview_data.get("highlights") or analysis.get("overview_highlights") or []
+
     compact_preview = meta.get("compact_preview") or ""
     compact_block = (
         f"""
@@ -201,59 +179,105 @@ def render_html(meta: Dict[str, Any], analysis: Dict[str, Any]) -> str:
     elif meta.get("source_url"):
         src_info = f"<div><b>URL:</b> {_escape(meta['source_url'])}</div>"
 
-    law_present = any(
-        [
-            law_block["score_text"],
-            law_block["summary"],
-            law_block["section_scores"],
-            law_block["issues"],
-        ]
-    )
-    business_present = any(
-        [
-            business_block["score_text"],
-            business_block["summary"],
-            business_block["section_scores"],
-            business_block["issues"],
-        ]
-    )
+    overview_details: List[str] = []
+    if overview_parties:
+        overview_details.append(f"<div><b>Стороны:</b> {_escape(overview_parties)}</div>")
+    if overview_subject:
+        overview_details.append(f"<div><b>Предмет:</b> {_escape(overview_subject)}</div>")
+    overview_details_html = "\n".join(overview_details) if overview_details else '<p style="color:#6b7280">Дополнительные сведения не выявлены.</p>'
 
-    chips: List[str] = []
-    if law_present:
-        chips.append(_score_chip("Соответствие законодательству", law_block["risk_color"], law_block["score_text"]))
-    if business_present:
-        chips.append(
-            _score_chip(
-                "Бизнес-риски и логика сделки",
-                business_block["risk_color"],
-                business_block["score_text"],
-            )
-        )
-    if not chips:
-        chips.append(_score_chip("Итоговая оценка", "", "—"))
+    law_summary_text = law_narrative.get("summary") or law_block.get("summary") or ""
+    law_analysis_points = law_narrative.get("analysis_points") or []
+    law_recommendations = law_narrative.get("recommendations") or []
 
-    law_cards = (
-        _analysis_cards(
-            "Соответствие законодательству",
-            law_block,
-            compact_block=compact_block,
-            include_sources=True,
-            sources=sources,
-        )
-        if law_present
-        else ""
-    )
+    business_summary_text = business_narrative.get("summary") or business_block.get("summary") or ""
+    business_analysis_points = business_narrative.get("analysis_points") or []
+    business_recommendations = business_narrative.get("recommendations") or []
 
-    business_cards = (
-        _analysis_cards(
-            "Бизнес-риски и логика сделки",
-            business_block,
-        )
-        if business_present
-        else ""
-    )
+    law_present = any([
+        law_block["score_text"],
+        law_summary_text,
+        law_block["section_scores"],
+        law_block["issues"],
+    ])
+    business_present = any([
+        business_block["score_text"],
+        business_summary_text,
+        business_block["section_scores"],
+        business_block["issues"],
+    ])
 
     title_score = law_block["score_text"] or business_block["score_text"]
+
+    law_block_html = ""
+    if law_present:
+        law_block_html = f"""
+  <div class=\"card\">
+    <h2>Соответствие законодательству</h2>
+    <div style=\"display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px\">
+      {_score_chip('Соответствие законодательству', law_block['risk_color'], law_block['score_text'])}
+    </div>
+    <p>{_escape(law_summary_text)}</p>
+    <p style=\"color:#374151\">{_escape(law_block.get('focus_summary') or '')}</p>
+    <h3>Ключевые зоны внимания</h3>
+    {_focus_list(law_block.get('top_focus') or [])}
+    <h3>Анализ по пунктам</h3>
+    {_bullet_list(law_analysis_points, 'Анализ по пунктам не сформирован.')}
+    <h3>Рекомендации</h3>
+    {_bullet_list(law_recommendations, 'Рекомендации не сформированы.')}
+    <h3>Детализация по разделам</h3>
+    <table style=\"width:100%;border-collapse:collapse\">
+      <thead>
+        <tr>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Раздел</th>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Баллы</th>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd;width:240px\">Уровень</th>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Комментарий</th>
+        </tr>
+      </thead>
+      <tbody>
+        {_section_rows(law_block.get('section_scores') or [])}
+      </tbody>
+    </table>
+    <h3>Замечания и детали</h3>
+    {_issues_list(law_block.get('issues') or [])}
+    <h3>Источники</h3>
+    {_sources_list(sources)}
+  </div>"""
+
+    business_block_html = ""
+    if business_present:
+        business_block_html = f"""
+  <div class=\"card\">
+    <h2>Бизнес-риски и логика сделки</h2>
+    <div style=\"display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px\">
+      {_score_chip('Бизнес-риски и логика сделки', business_block['risk_color'], business_block['score_text'])}
+    </div>
+    <p>{_escape(business_summary_text)}</p>
+    <p style=\"color:#374151\">{_escape(business_block.get('focus_summary') or '')}</p>
+    <h3>Ключевые зоны внимания</h3>
+    {_focus_list(business_block.get('top_focus') or [])}
+    <h3>Анализ по пунктам</h3>
+    {_bullet_list(business_analysis_points, 'Анализ по пунктам не сформирован.')}
+    <h3>Рекомендации</h3>
+    {_bullet_list(business_recommendations, 'Рекомендации не сформированы.')}
+    <h3>Детализация по разделам</h3>
+    <table style=\"width:100%;border-collapse:collapse\">
+      <thead>
+        <tr>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Раздел</th>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Баллы</th>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd;width:240px\">Уровень</th>
+          <th style=\"text-align:left;padding:8px 12px;border-bottom:1px solid #ddd\">Комментарий</th>
+        </tr>
+      </thead>
+      <tbody>
+        {_section_rows(business_block.get('section_scores') or [])}
+      </tbody>
+    </table>
+    <h3>Замечания и детали</h3>
+    {_issues_list(business_block.get('issues') or [])}
+  </div>"""
 
     html_doc = f"""<!DOCTYPE html>
 <html lang=\"ru\"><head>
@@ -264,20 +288,23 @@ def render_html(meta: Dict[str, Any], analysis: Dict[str, Any]) -> str:
   .card {{ background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:18px; margin:12px 0; }}
   h1 {{ font-size:20px; margin:6px 0 0 0; }}
   h2 {{ font-size:18px; margin:0 0 8px 0; }}
+  h3 {{ font-size:16px; margin:12px 0 6px 0; }}
   small {{ color:#6b7280; }}
 </style>
 </head><body style=\"max-width:980px;margin:24px auto;padding:0 16px;background:#f3f4f6\">
   <div class=\"card\">
-    <h1>Итоговые оценки договора</h1>
-    <div style=\"display:flex;flex-wrap:wrap;gap:24px;margin-top:12px\">
-      {''.join(chips)}
-    </div>
-    <div style=\"margin-top:12px;color:#6b7280\"><small>{now}</small></div>
+    <h1>Общая информация о документе</h1>
+    <div style=\"margin-bottom:12px;color:#6b7280\"><small>Сформировано: {now}</small></div>
+    <p>{_escape(overview_summary or 'Описание документа не сформировано.')}</p>
+    {overview_details_html}
+    <h3>Ключевые факты</h3>
+    {_bullet_list(overview_highlights_raw, 'Ключевые факты не выделены.')}
+    {compact_block}
   </div>
 
-  {law_cards}
+  {law_block_html}
 
-  {business_cards}
+  {business_block_html}
 
   <div class=\"card\" style=\"color:#374151\">
     <h2>Метаданные</h2>
