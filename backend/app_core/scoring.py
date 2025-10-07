@@ -1,76 +1,168 @@
-from typing import List, Tuple, Dict, Any
-from .types import SectionScore, FocusItem
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import yaml
+
 from .config import settings
+from .types import FocusItem, SectionScore
 
-SECTION_DEFS = [
-    {"key": "parties", "title": "Идентификация сторон, полномочия, реквизиты", "weight": 8},
-    {"key": "scope", "title": "Предмет/результат, измеримость (SOW/ТЗ)", "weight": 10},
-    {"key": "timeline_acceptance", "title": "Сроки, поставка/оказание, приемка, milestones", "weight": 8},
-    {"key": "payment", "title": "Цена, налоги, порядок платежей, удержания", "weight": 10},
-    {"key": "liability", "title": "Ответственность, неустойки/штрафы, лимиты (cap)", "weight": 10},
-    {"key": "reps_warranties", "title": "Гарантии и заверения сторон", "weight": 6},
-    {"key": "ip", "title": "IP/права на результаты, лицензии, отчуждение", "weight": 8},
-    {"key": "confidentiality", "title": "Конфиденциальность/коммерческая тайна", "weight": 6},
-    {"key": "personal_data", "title": "Персональные данные/данные (GDPR/152-ФЗ и пр.)", "weight": 8},
-    {"key": "force_majeure", "title": "Форс-мажор", "weight": 4},
-    {"key": "change_termination", "title": "Изменение/расторжение, односторонний отказ", "weight": 6},
-    {"key": "law_venue", "title": "Применимое право и подсудность/арбитраж", "weight": 6},
-    {"key": "conflicts_priority", "title": "Конфликты/приоритет документов, приложения", "weight": 5},
-    {"key": "signatures_form", "title": "Подписи, форма сделки, экземпляры/ЭП", "weight": 5},
-]
-SECTION_INDEX = {s["key"]: s for s in SECTION_DEFS}
-SECTION_KEYS = set(SECTION_INDEX.keys())
+_CONFIG_FALLBACK_WHY = "Низкая оценка раздела может привести к юридическим рискам."
 
-WHY_MAP = {
-    "scope": "Неясный предмет лишает договор исполнимости и мешает приемке.",
-    "payment": "Неопределённая цена/сроки оплаты создают риски споров и кассовых разрывов.",
-    "liability": "Отсутствие лимита ответственности ведёт к непропорциональным рискам.",
-    "ip": "Без явной передачи/лицензии права на результаты могут остаться у исполнителя.",
-    "timeline_acceptance": "Нет процедуры приемки — спорно, когда обязательства исполнены.",
-    "personal_data": "Нарушения по ПДн чреваты штрафами и запретом обработки.",
-    "law_venue": "Без права и подсудности сложнее защищать интересы и исполнять решения.",
-    "confidentiality": "Без NDA утечка сведений не контролируется.",
-    "parties": "Ошибки в реквизитах/полномочиях делают договор оспоримым.",
-    "change_termination": "Односторонние изменения без триггеров — дисбаланс и риски.",
-    "conflicts_priority": "Конфликт документов рушит логику договора.",
-    "signatures_form": "Ошибки в форме/подписи ведут к недействительности.",
-    "reps_warranties": "Без заверений растут риски недостоверных сведений.",
-    "force_majeure": "Нечёткий форс-мажор — злоупотребления и неопределённость.",
-}
-SUGGEST_MAP = {
-    "scope": "Прописать измеримый результат/ТЗ и критерии приемки.",
-    "payment": "Зафиксировать цену/сроки оплаты, аванс/удержания, налоги.",
-    "liability": "Установить cap ответственности и исключения.",
-    "ip": "Определить передачу/лицензию прав: объём, территория, срок.",
-    "timeline_acceptance": "Ввести форму акта, сроки и последствия просрочки.",
-    "personal_data": "Добавить DPA/152-ФЗ: роли, цели, трансграничку, меры.",
-    "law_venue": "Указать право РФ и подсудность/арбитраж.",
-    "confidentiality": "Задать режим тайны, срок, исключения и ответственность.",
-    "parties": "Проверить ОГРН/ИНН, полномочия, доверенности/ЭП.",
-    "change_termination": "Определить основания и уведомления.",
-    "conflicts_priority": "Добавить правило приоритета и реестр приложений.",
-    "signatures_form": "Указать форму (бумага/ЭП), экз., порядок обмена.",
-    "reps_warranties": "Заверения об отсутствии прав третьих лиц.",
-    "force_majeure": "Согласовать перечень событий и порядок уведомления.",
-}
+
+class _AnalyzeConfigCache:
+    """Lazy loader for analyze section configuration with mtime-based invalidation."""
+
+    def __init__(self) -> None:
+        self._config_path = Path(__file__).resolve().parent / "config" / "analyze_sections.yaml"
+        self._cache: Dict[str, Any] | None = None
+        self._mtime: float | None = None
+
+    def _load_from_disk(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        try:
+            with open(self._config_path, "r", encoding="utf-8") as fp:
+                raw = yaml.safe_load(fp) or {}
+                if isinstance(raw, dict):
+                    data = raw
+        except FileNotFoundError:
+            data = {}
+        except yaml.YAMLError:
+            # Invalid YAML should not break analysis. Preserve previous cache if available.
+            if self._cache is not None:
+                return self._cache
+            data = {}
+
+        defaults = data.get("defaults") or {}
+        sections: List[Dict[str, Any]] = []
+        for item in data.get("sections") or []:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            title = item.get("title")
+            weight = item.get("weight")
+            if not key or not title:
+                continue
+            try:
+                weight_value = int(weight)
+            except (TypeError, ValueError):
+                continue
+
+            record: Dict[str, Any] = {
+                "key": str(key),
+                "title": str(title),
+                "weight": weight_value,
+            }
+            if item.get("why"):
+                record["why"] = str(item["why"])
+            if item.get("suggestion"):
+                record["suggestion"] = str(item["suggestion"])
+            sections.append(record)
+
+        section_defs = [
+            {"key": s["key"], "title": s["title"], "weight": s["weight"]}
+            for s in sections
+        ]
+        section_index = {s["key"]: s for s in section_defs}
+        why_map = {s["key"]: s.get("why") for s in sections if s.get("why")}
+        suggest_map = {
+            s["key"]: s.get("suggestion") for s in sections if s.get("suggestion")
+        }
+
+        return {
+            "sections": sections,
+            "section_defs": section_defs,
+            "section_index": section_index,
+            "section_keys": set(section_index.keys()),
+            "why_map": why_map,
+            "suggest_map": suggest_map,
+            "default_why": defaults.get("why") or _CONFIG_FALLBACK_WHY,
+            "default_suggestion": defaults.get("suggestion"),
+            "sections_lines": "\n".join(
+                [f'- "{s["key"]}" — {s["title"]}' for s in section_defs]
+            ),
+        }
+
+    def get(self) -> Dict[str, Any]:
+        try:
+            mtime = self._config_path.stat().st_mtime
+        except FileNotFoundError:
+            mtime = None
+
+        if self._cache is not None and self._mtime == mtime:
+            return self._cache
+
+        config = self._load_from_disk()
+        self._cache = config
+        self._mtime = mtime
+        return config
+
+
+_ANALYZE_CONFIG = _AnalyzeConfigCache()
+
+
+def _config() -> Dict[str, Any]:
+    return _ANALYZE_CONFIG.get()
+
+
+def get_section_defs() -> List[Dict[str, Any]]:
+    return _config()["section_defs"]
+
+
+def get_section_index() -> Dict[str, Dict[str, Any]]:
+    return _config()["section_index"]
+
+
+def get_section_keys() -> set[str]:
+    return _config()["section_keys"]
+
+
+def get_why_map() -> Dict[str, str]:
+    return _config()["why_map"]
+
+
+def get_suggest_map() -> Dict[str, str]:
+    return _config()["suggest_map"]
+
+
+def get_default_why() -> str:
+    return _config()["default_why"]
+
+
+def get_default_suggestion() -> str | None:
+    return _config()["default_suggestion"]
+
 
 def sections_lines() -> str:
-    return "\n".join([f'- "{s["key"]}" — {s["title"]}' for s in SECTION_DEFS])
+    return _config()["sections_lines"]
 
-def compute_total_and_color(section_scores: List[SectionScore]) -> Tuple[int, str, List[Dict[str, Any]]]:
-    items, total = [], 0.0
+
+def compute_total_and_color(
+    section_scores: List[SectionScore],
+) -> Tuple[int, str, List[Dict[str, Any]]]:
+    cfg = _config()
+    section_index = cfg["section_index"]
+    items: List[Dict[str, Any]] = []
+    total = 0.0
     for s in section_scores:
-        meta = SECTION_INDEX.get(s.key)
+        meta = section_index.get(s.key)
         if not meta:
             continue
         weight = meta["weight"]
         weighted = (max(0, min(5, s.raw)) / 5.0) * weight
         total += weighted
-        items.append({
-            "key": s.key, "title": meta["title"], "weight": weight,
-            "raw": s.raw, "score": round(weighted, 2), "of": weight,
-            "comment": s.comment or ""
-        })
+        items.append(
+            {
+                "key": s.key,
+                "title": meta["title"],
+                "weight": weight,
+                "raw": s.raw,
+                "score": round(weighted, 2),
+                "of": weight,
+                "comment": s.comment or "",
+            }
+        )
     score_total = int(round(total))
     if score_total >= settings.SCORE_GREEN:
         color = "green"
@@ -80,18 +172,46 @@ def compute_total_and_color(section_scores: List[SectionScore]) -> Tuple[int, st
         color = "red"
     return score_total, color, items
 
-def build_focus(section_table: List[Dict[str, Any]], issues: List[Dict[str, Any]]) -> Tuple[str, List[FocusItem]]:
+
+def build_focus(
+    section_table: List[Dict[str, Any]],
+    issues: List[Dict[str, Any]],
+) -> Tuple[str, List[FocusItem]]:
+    cfg = _config()
+    why_map = cfg["why_map"]
+    default_why = cfg["default_why"]
+    suggest_map = cfg["suggest_map"]
+    default_suggestion = cfg["default_suggestion"]
+
     sorted_sections = sorted(section_table, key=lambda x: (x["raw"], -x["weight"]))
     top: List[FocusItem] = []
     for row in sorted_sections[:3]:
         key = row["key"]
-        why = WHY_MAP.get(key, "Низкая оценка раздела может привести к юридическим рискам.")
-        sugg = next((it.get("suggestion") for it in issues if it.get("section") == key and it.get("suggestion")), None)
-        top.append(FocusItem(
-            key=key, title=row["title"], raw=row["raw"], score=row["score"],
-            why=why, suggestion=sugg or SUGGEST_MAP.get(key)
-        ))
+        why = why_map.get(key, default_why)
+        sugg = next(
+            (
+                it.get("suggestion")
+                for it in issues
+                if it.get("section") == key and it.get("suggestion")
+            ),
+            None,
+        )
+        top.append(
+            FocusItem(
+                key=key,
+                title=row["title"],
+                raw=row["raw"],
+                score=row["score"],
+                why=why,
+                suggestion=sugg or suggest_map.get(key) or default_suggestion,
+            )
+        )
     if not top:
         return "Серьёзных проблем не выявлено.", []
-    focus_summary = "Обратить внимание: " + "; ".join([f"{t.title.lower()} — {t.why}" for t in top]) + "."
+    focus_summary = (
+        "Обратить внимание: "
+        + "; ".join([f"{t.title.lower()} — {t.why}" for t in top])
+        + "."
+    )
     return focus_summary, top
+
