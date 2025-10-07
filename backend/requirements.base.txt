@@ -1,0 +1,7 @@
+# Пакеты, которые долго ставятся и должны быть в базовом образе
+# torch уже устанавливается отдельной командой (см. Dockerfile.base)
+sentence-transformers
+FlagEmbedding
+transformers
+qdrant-client
+

@@ -19,6 +19,7 @@ SECTION_DEFS = [
     {"key": "signatures_form", "title": "Подписи, форма сделки, экземпляры/ЭП", "weight": 5},
 ]
 SECTION_INDEX = {s["key"]: s for s in SECTION_DEFS}
+SECTION_KEYS = set(SECTION_INDEX.keys())
 
 WHY_MAP = {
     "scope": "Неясный предмет лишает договор исполнимости и мешает приемке.",

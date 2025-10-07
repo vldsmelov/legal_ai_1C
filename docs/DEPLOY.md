@@ -30,13 +30,18 @@ ollama pull qwen2.5:7b-instruct
 ```
 
 ### Чистая сборка с базовым образом
-Если используете разделённую сборку (`Dockerfile.base` + `backend/Dockerfile`):
+Если используете разделённую сборку (`backend/Dockerfile.base` + `backend/Dockerfile`):
 ```bash
-# в корне проекта (рядом с Dockerfile.base и requirements.txt)
-docker build -f Dockerfile.base -t legal-ai/backend-base:cu130 . --no-cache
+# базовый образ собираем из каталога backend
+docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
 # затем соберём только backend (использует BASE_IMAGE из compose)
 docker compose build --no-cache backend
 ```
+
+### Обновление зависимостей
+
+- Лёгкие пакеты: добавьте/обновите в `backend/requirements.txt`, затем выполните `docker compose build backend` и `docker compose up -d backend`.
+- Тяжёлые пакеты (PyTorch, HuggingFace и т.п.): меняем `backend/requirements.base.txt` и пересобираем базовый образ `backend/Dockerfile.base`, после чего пересобираем `backend`.
 
 **Поднять стек**
 ```

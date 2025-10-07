@@ -1,6 +1,30 @@
-import json, re, hashlib, torch
+import ast
+import json
+import re
+import hashlib
+import torch
 from typing import Any, Dict, List
+
 from .types import SourceItem
+
+
+def _normalize_json_like(text: str) -> str:
+    if not text:
+        return ""
+    # Нормализуем кавычки и убираем висячие запятые, которые часто добавляет LLM
+    normalized = (
+        text.replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("’", "'")
+    )
+    # Удаляем запятые перед закрывающими скобками
+    normalized = re.sub(r",\s*([}\]])", r"\1", normalized)
+    return normalized
+
 
 def extract_json(text: str) -> Dict[str, Any]:
     if not text:
@@ -10,8 +34,15 @@ def extract_json(text: str) -> Dict[str, Any]:
     except Exception:
         pass
     text = re.sub(r"```(json)?", "", text).strip()
+    normalized = _normalize_json_like(text)
     try:
-        return json.loads(text)
+        return json.loads(normalized)
+    except Exception:
+        pass
+    try:
+        parsed = ast.literal_eval(normalized)
+        if isinstance(parsed, dict):
+            return parsed
     except Exception:
         pass
     start = text.find("{")

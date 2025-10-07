@@ -13,10 +13,10 @@ RUN pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu130
 # RUN pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu128 \
 #     torch torchvision torchaudio
 
-# Остальные зависимости
-COPY requirements.txt /tmp/requirements.txt
+# Прочие тяжёлые зависимости, которые хотим кешировать в базовом образе
+COPY requirements.base.txt /tmp/requirements.base.txt
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir -r /tmp/requirements.txt
+    pip install --no-cache-dir -r /tmp/requirements.base.txt
 
 # Прогрев кэша эмбеддера (оставляем как было)
 ENV HF_HOME=/root/.cache/huggingface
@@ -34,4 +34,4 @@ FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False, device="cpu")
 print("reranker cached in image")
 PY
 
-WORKDIR /opt/appbase
+WORKDIR /opt/app
