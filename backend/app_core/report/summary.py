@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..scoring import SECTION_INDEX, SUGGEST_MAP
+from ..scoring import get_section_index, get_suggest_map
 
 
 _SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -35,8 +35,8 @@ def build_document_overview(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _format_section_row(row: Dict[str, Any]) -> str:
-    title = row.get("title") or SECTION_INDEX.get(row.get("key"), {}).get("title")
+def _format_section_row(row: Dict[str, Any], section_index: Dict[str, Any]) -> str:
+    title = row.get("title") or section_index.get(row.get("key"), {}).get("title")
     title_text = title or row.get("key") or "Раздел"
     raw = row.get("raw")
     comment = (row.get("comment") or "").strip()
@@ -65,9 +65,10 @@ def summarize_report_block(report: Dict[str, Any], block_title: str) -> Dict[str
         label = risk_map.get(risk_color.lower())
         if label:
             summary_parts.append(label.capitalize() + ".")
+    section_index = get_section_index()
     focus_lines: List[str] = []
     for focus in top_focus[:3]:
-        title = focus.get("title") or SECTION_INDEX.get(focus.get("key"), {}).get("title")
+        title = focus.get("title") or section_index.get(focus.get("key"), {}).get("title")
         why = focus.get("why") or ""
         if title:
             line = f"{title}: {why}".strip().rstrip(".")
@@ -83,17 +84,18 @@ def summarize_report_block(report: Dict[str, Any], block_title: str) -> Dict[str
 
     analysis_points: List[str] = []
     for row in sorted(section_scores, key=lambda x: (x.get("raw", 6), -float(x.get("weight", 0)))):
-        formatted = _format_section_row(row)
+        formatted = _format_section_row(row, section_index)
         if formatted:
             analysis_points.append(formatted)
     if not analysis_points:
         analysis_points.append(_DEFAULT_ANALYSIS_POINT)
 
+    suggest_map = get_suggest_map()
     recommendations: List[str] = []
     for issue in sorted(issues, key=lambda i: _SEVERITY_ORDER.get(str(i.get("severity")).lower(), 3)):
         section_key = issue.get("section")
-        title = SECTION_INDEX.get(section_key, {}).get("title") or section_key or "Блок"
-        suggestion = (issue.get("suggestion") or "").strip() or SUGGEST_MAP.get(section_key)
+        title = section_index.get(section_key, {}).get("title") or section_key or "Блок"
+        suggestion = (issue.get("suggestion") or "").strip() or suggest_map.get(section_key)
         if suggestion:
             recommendations.append(f"{title}: {suggestion}")
         else:
