@@ -178,7 +178,8 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
                 }
             )
 
-    focus_summary, top_focus = build_focus(section_table, issues)
+    focus_summary, top_focus_models = build_focus(section_table, issues)
+    top_focus = [item.dict() for item in top_focus_models]
     summary = (parsed.get("summary") or "").strip() or default_summary
     if len(missing_keys) == len(SECTION_DEFS):
         summary = (
