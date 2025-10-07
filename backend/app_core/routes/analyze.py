@@ -17,6 +17,7 @@ from ..scoring import (
     sections_lines,
 )
 from ..utils import dedup_sources_by_hash
+from ..report.summary import build_document_overview, summarize_report_block
 
 router = APIRouter()
 
@@ -76,6 +77,19 @@ def business_system_prompt(req: AnalyzeRequest) -> str:
 
 def business_user_prompt(req: AnalyzeRequest) -> str:
     return render_prompt("business_user", contract_text=req.contract_text)
+
+
+def overview_system_prompt(req: AnalyzeRequest) -> str:
+    return render_prompt(
+        "overview_system",
+        jurisdiction=req.jurisdiction,
+        contract_type=req.contract_type or "не указан",
+        language=req.language,
+    ).strip()
+
+
+def overview_user_prompt(req: AnalyzeRequest) -> str:
+    return render_prompt("overview_user", contract_text=req.contract_text)
 
 
 def _has_all_sections(payload: Dict[str, Any]) -> bool:
@@ -229,6 +243,20 @@ async def analyze(req: AnalyzeRequest):
 
     business_report = build_report(business_parsed, DEFAULT_BUSINESS_SUMMARY)
 
+    try:
+        overview_raw = await ollama_chat_json(
+            overview_system_prompt(req),
+            overview_user_prompt(req),
+            req.model,
+            max_tokens=min(req.max_tokens or 600, 600),
+        )
+    except Exception:
+        overview_raw = {}
+    overview = build_document_overview(overview_raw)
+
+    law_narrative = summarize_report_block(law_report, "Соответствие законодательству")
+    business_narrative = summarize_report_block(business_report, "Бизнес-риски и логика сделки")
+
     return AnalyzeResponse(
         score_total=law_report["score_total"],
         score_text=law_report["score_text"],
@@ -250,4 +278,7 @@ async def analyze(req: AnalyzeRequest):
         business_top_focus=business_report["top_focus"],
         business_issues=business_report["issues"],
         business_section_scores=business_report["section_scores"],
+        overview=overview,
+        law_narrative=law_narrative,
+        business_narrative=business_narrative,
     )

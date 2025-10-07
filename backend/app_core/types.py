@@ -47,6 +47,20 @@ class FocusItem(BaseModel):
     why: str
     suggestion: Optional[str] = None
 
+# Summaries
+class DocumentOverview(BaseModel):
+    summary: str
+    parties: Optional[str] = None
+    subject: Optional[str] = None
+    highlights: List[str] = Field(default_factory=list)
+
+
+class NarrativeBlock(BaseModel):
+    summary: str
+    analysis_points: List[str] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+
+
 # Responses
 class AnalyzeResponse(BaseModel):
     score_total: int
@@ -69,6 +83,9 @@ class AnalyzeResponse(BaseModel):
     business_top_focus: List[FocusItem]
     business_issues: List[Issue]
     business_section_scores: List[Dict[str, Any]]
+    overview: DocumentOverview
+    law_narrative: NarrativeBlock
+    business_narrative: NarrativeBlock
 
 # Ingest
 class IngestItem(BaseModel):
