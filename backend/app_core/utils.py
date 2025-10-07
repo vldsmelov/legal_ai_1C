@@ -2,8 +2,12 @@ import ast
 import json
 import re
 import hashlib
-import torch
 from typing import Any, Dict, List
+
+try:  # pragma: no cover - optional dependency
+    import torch  # type: ignore
+except Exception:  # noqa: S110 - fallback when torch is unavailable
+    torch = None
 
 from .types import SourceItem
 
@@ -65,9 +69,16 @@ def text_hash(t: str) -> str:
     return hashlib.sha256(t.encode("utf-8")).hexdigest()[:16]
 
 def pick_device_auto(req: str) -> str:
-    if req == "cuda": return "cuda"
-    if req == "cpu": return "cpu"
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if req == "cuda":
+        return "cuda"
+    if req == "cpu":
+        return "cpu"
+    if torch is not None:
+        try:
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+    return "cpu"
 
 def dedup_sources_by_hash(sources: List[SourceItem]) -> List[SourceItem]:
     seen, out = set(), []
