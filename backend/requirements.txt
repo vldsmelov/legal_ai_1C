@@ -1,13 +1,12 @@
+# Лёгкие зависимости backend-а.
+# Тяжёлые пакеты (torch, sentence-transformers, FlagEmbedding, transformers, qdrant-client)
+# устанавливаются на этапе сборки базового образа (см. requirements.base.txt).
 fastapi
 uvicorn[standard]
 httpx
 pydantic>=2
 numpy
-
-qdrant-client
-sentence-transformers
-FlagEmbedding
-transformers
-
 selectolax
 watchfiles
+PyYAML
+

@@ -1,0 +1,39 @@
+ollama:
+  url: http://ollama:11434
+  model: qwen2.5:7b-instruct
+
+rag:
+  qdrant_url: http://qdrant:6333
+  collection: ru_law_m3
+  embedding_model: BAAI/bge-m3
+  embed_device: auto
+  top_k: 8
+
+reranker:
+  enable: true
+  model: BAAI/bge-reranker-v2-m3
+  device: auto
+  keep: 5
+  batch: 16
+  debug: false
+
+startup:
+  checks: true
+  self_check_timeout: 5
+  self_check_gen: false
+  cuda_name: false
+
+scoring:
+  mode: strict
+  score_green: 75
+  score_yellow: 51
+  business_max_tokens: 1400
+  business_retry_step: 400
+
+prompts:
+  dir: prompts
+  analyze_system: analyze_system.txt
+  analyze_user: analyze_user.txt
+  analyze_system_lenient_rule: analyze_system_lenient_rule.txt
+  business_system: business_system.txt
+  business_user: business_user.txt
