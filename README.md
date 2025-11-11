@@ -2,7 +2,7 @@
 
 **Назначение:** проверка договоров по российскому праву локально, без выхода в сеть.
 
-**Стек:** FastAPI · Ollama (LLM: `qwen2.5:7b-instruct`) · Qdrant (вектора) · BGE-M3 (эмбеддер) · **bge-reranker-v2-m3** (GPU-реранкер).
+**Стек:** FastAPI · Ollama (LLM: `krith/qwen2.5-32b-instruct:IQ4_XS`) · Qdrant (вектора) · BGE-M3 (эмбеддер) · **bge-reranker-v2-m3** (GPU-реранкер).
 
 ---
 
@@ -50,20 +50,21 @@ corpus/
 
 ```bash
 # 1) Модель для Ollama
-ollama pull qwen2.5:7b-instruct
+# (сервис Ollama должен быть запущен и слушать http://localhost:11434)
+ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 
 # 2) Поднять стек
 docker compose up -d --build
 
 # 3) Проверить здоровье
-curl -s http://localhost:8000/health | jq
+curl -s http://localhost:8087/health | jq
 
 # 4) Загрузить демо-НПА
 mkdir -p corpus
-curl -s -X POST http://localhost:8000/rag/ingest_sample | jq
+curl -s -X POST http://localhost:8087/rag/ingest_sample | jq
 
 # 5) Пробный анализ
-curl -s -X POST http://localhost:8000/analyze \
+curl -s -X POST http://localhost:8087/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "contract_text": "ДОГОВОР УСЛУГ ... (см. примеры ниже)",
@@ -85,6 +86,8 @@ docker compose build backend
 docker compose up -d backend
 ```
 
+> Примечание: backend ожидает, что Ollama доступна по `http://localhost:11434`. В docker-compose.yml добавлен `extra_hosts: host.docker.internal:host-gateway`, поэтому сервис внутри контейнера обращается к Ollama на машине-хосте по адресу `http://host.docker.internal:11434`.
+
 ### Разделение зависимостей
 
 - `backend/Dockerfile.base` + `backend/requirements.base.txt` — тяжёлые пакеты (PyTorch, HuggingFace), которые ставятся редко.
@@ -99,8 +102,8 @@ docker compose up -d backend
 ## Конфигурация (ENV)
 | Ключ                 | Значение (по умолч.)      | Описание                 |
 | -------------------- | ------------------------- | ------------------------ |
-| `OLLAMA_BASE_URL`    | `http://ollama:11434`     | адрес Ollama             |
-| `OLLAMA_MODEL`       | `qwen2.5:7b-instruct`     | LLM                      |
+| `OLLAMA_BASE_URL`    | `http://127.0.0.1:11434`     | адрес Ollama             |
+| `OLLAMA_MODEL`       | `krith/qwen2.5-32b-instruct:IQ4_XS` | LLM                      |
 | `QDRANT_URL`         | `http://qdrant:6333`      | адрес Qdrant             |
 | `QDRANT_COLLECTION`  | `ru_law_m3`               | коллекция                |
 | `EMBEDDING_MODEL`    | `BAAI/bge-m3`             | эмбеддер                 |
@@ -176,7 +179,7 @@ Site-aware парсер страниц публикаций: пытается р
 
 - **Онлайн-ингест (пример):**
 ```bash
-curl -s -X POST http://localhost:8000/rag/fetch_ingest_publication \
+curl -s -X POST http://localhost:8087/rag/fetch_ingest_publication \
   -H "Content-Type: application/json" \
   -d '{"url":"http://publication.pravo.gov.ru/Document/View/<ID>?format=HTML","allow_http_downgrade":true}'
 ```

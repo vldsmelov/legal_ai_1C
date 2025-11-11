@@ -12,5 +12,5 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY app.py /workspace/backend/app.py
 
-EXPOSE 8000
+EXPOSE 8087
 # запуск задаёт compose: command: uvicorn ...
