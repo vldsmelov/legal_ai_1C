@@ -59,12 +59,12 @@
 corpus/ru_sample.jsonl
 ```
 ```bash
-curl -s -X POST http://localhost:8000/rag/ingest_sample | jq
+curl -s -X POST http://localhost:8087/rag/ingest_sample | jq
 ```
 
 Через API (пакетно)
 ```bash
-curl -s -X POST http://localhost:8000/rag/ingest \
+curl -s -X POST http://localhost:8087/rag/ingest \
   -H 'Content-Type: application/json' \
   -d '{"items":[
     {"act_id":"gk_rf_part1","act_title":"ГК РФ (Часть первая)","article":"432","revision_date":"2025-01-01","jurisdiction":"RU","text":"...","local_ref":"gkrf/ch1/art432"},

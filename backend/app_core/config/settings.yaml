@@ -1,6 +1,6 @@
 ollama:
-  url: http://ollama:11434
-  model: qwen2.5:7b-instruct
+  url: http://127.0.0.1:11434
+  model: krith/qwen2.5-32b-instruct:IQ4_XS
 
 rag:
   qdrant_url: http://qdrant:6333

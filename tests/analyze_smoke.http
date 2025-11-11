@@ -1,10 +1,10 @@
 ### (опционально) прогружаем пример норм РФ в векторное хранилище
-POST http://localhost:8000/rag/ingest_sample
+POST http://localhost:8087/rag/ingest_sample
 
 ###
 
 # 1) ЯВНО ЗЕЛЁНЫЙ — ожидаем risk_color = "green", score_total >= 85
-POST http://localhost:8000/analyze
+POST http://localhost:8087/analyze
 Content-Type: application/json
 
 {
@@ -18,7 +18,7 @@ Content-Type: application/json
 ###
 
 # 2) ЖЁЛТЫЙ — ожидаем risk_color = "yellow", ~60–70/100
-POST http://localhost:8000/analyze
+POST http://localhost:8087/analyze
 Content-Type: application/json
 
 {
@@ -32,7 +32,7 @@ Content-Type: application/json
 ###
 
 # 3) КРАСНЫЙ — ожидаем risk_color = "red", ≤ 30/100
-POST http://localhost:8000/analyze
+POST http://localhost:8087/analyze
 Content-Type: application/json
 
 {
