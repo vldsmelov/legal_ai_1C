@@ -5,13 +5,13 @@
 - ОС: Ubuntu 22.04+ / Debian 12+ / аналогичный Linux.
 - Docker Engine 27+, Docker Compose 2.39+.
 - NVIDIA GPU (RTX 5090) + драйверы + nvidia-container-toolkit.
-- CUDA userspace для PyTorch nightly cu130 (в образ уже встроено).
+- CUDA userspace для PyTorch nightly cu130 (образ основан на `nvidia/cuda:13.0.0-runtime-ubuntu24.04`).
 - Доступ к сети только для начальной загрузки весов (или прогретый кэш).
 
 **Проверка GPU в Docker**:
 ```bash
 nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi
 ```
 
 **Установка nvidia-container-toolkit (если не установлен)**:
@@ -32,19 +32,20 @@ sudo systemctl restart docker
 ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 ```
 
-### Чистая сборка с базовым образом
-Если используете разделённую сборку (`backend/Dockerfile.base` + `backend/Dockerfile`):
+### Чистая сборка backend
 ```bash
-# базовый образ собираем из каталога backend
-docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
-# затем соберём только backend (использует BASE_IMAGE из compose)
+docker compose down --remove-orphans
 docker compose build --no-cache backend
+docker compose up -d
 ```
 
 ### Обновление зависимостей
 
-- Лёгкие пакеты: добавьте/обновите в `backend/requirements.txt`, затем выполните `docker compose build backend` и `docker compose up -d backend`.
-- Тяжёлые пакеты (PyTorch, HuggingFace и т.п.): меняем `backend/requirements.base.txt` и пересобираем базовый образ `backend/Dockerfile.base`, после чего пересобираем `backend`.
+Добавьте или обновите зависимости в `backend/requirements.txt`, затем выполните:
+```bash
+docker compose build backend
+docker compose up -d backend
+```
 
 **Поднять стек**
 ```
