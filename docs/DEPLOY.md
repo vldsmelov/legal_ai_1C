@@ -24,9 +24,12 @@ sudo systemctl restart docker
 
 ## 2) Сборка и запуск
 
-**Модели Ollama**
+**Ollama (отдельный сервис)**
+
+Разверните Ollama на хосте и убедитесь, что API доступен по `http://localhost:11434`. Сервис должен быть запущен до старта backend (контейнер подключается к нему через `host.docker.internal`).
+Подгрузите модель:
 ```
-ollama pull qwen2.5:7b-instruct
+ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 ```
 
 ### Чистая сборка с базовым образом
@@ -51,7 +54,7 @@ docker compose up -d --build
 
 **Проверки**
 ```
-curl -s http://localhost:8000/health | jq
+curl -s http://localhost:8087/health | jq
 docker logs -f backend
 ```
 
@@ -81,11 +84,11 @@ PY
 ## 3.1 Сеть и фоллбэк HTTPS→HTTP
 В некоторых средах HTTPS из контейнера может быть недоступен. Для диагностики:
 ```bash 
-curl -s "http://localhost:8000/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8000/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
+curl -s "http://localhost:8087/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8087/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
 ```
 Онлайн-ингест поддерживает автоматический даунгрейд: 
 ```bash
-curl -s -X POST http://localhost:8000/rag/fetch_ingest_publication
+curl -s -X POST http://localhost:8087/rag/fetch_ingest_publication
 ```
 ## 4) Режимы старта
 
@@ -101,7 +104,7 @@ STARTUP_CUDA_NAME=0
 
 **Команда:**
 ```
-uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
+uvicorn app:app --host 0.0.0.0 --port 8087 --log-level info
 ```
 Не используйте `--reload` в проде: он порождает двойной процесс и усложняет диагностику.
 
@@ -113,7 +116,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
 - Для онлайн-ингеста используйте /rag/fetch_ingest_publication_batch и concurrency.
 
 ## 6) Безопасность
-- Запускать backend в частной сети Docker; наружу публиковать только 8000 (или за обратным прокси).
+- Запускать backend в частной сети Docker; наружу публиковать только 8087 (или за обратным прокси).
 - По желанию: включить простую аутентификацию/токен в прокси (Nginx/Traefik).
 - CORS — ограничить домены фронта.
 - Логи — не сохранять текст договоров дольше необходимого.
@@ -141,6 +144,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
 - Прогрейте HF-кэш и образ заранее на машине с интернетом:
   
   - .hf_cache (BGE-M3, bge-reranker-v2-m3)
-  - ollama pull qwen2.5:7b-instruct + экспорт образа ollama (или локальный реестр)
+  - ollama pull krith/qwen2.5-32b-instruct:IQ4_XS + экспорт образа ollama (или локальный реестр)
 
 - Перенесите на целевую машину, смонтируйте .hf_cache, импортируйте модели Ollama.
+

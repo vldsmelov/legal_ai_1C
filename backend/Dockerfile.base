@@ -6,12 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # === PyTorch NIGHTLY с поддержкой Blackwell (sm_120) ===
-# Вариант А (CUDA 13.0):
-RUN pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu130 \
-    torch torchvision torchaudio
-# Если вдруг колёса cu130 недоступны в момент сборки, используйте вариант Б:
-# RUN pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu128 \
-#     torch torchvision torchaudio
+# Пробуем свежие сборки для CUDA 13.0, если их нет — откатываемся на CUDA 12.8,
+# а в крайнем случае ставим CPU-версию, чтобы сборка образа не падала.
+RUN bash -lc 'set -euo pipefail
+if ! pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu130 torch torchvision torchaudio; then
+  if ! pip install --pre --index-url https://download.pytorch.org/whl/nightly/cu128 torch torchvision torchaudio; then
+    pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio
+  fi
+fi'
 
 # Прочие тяжёлые зависимости, которые хотим кешировать в базовом образе
 COPY requirements.base.txt /tmp/requirements.base.txt
