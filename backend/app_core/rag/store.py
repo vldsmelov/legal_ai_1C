@@ -1,5 +1,10 @@
-import json, os, numpy as np
-from typing import List
+import json
+import logging
+import time
+from pathlib import Path
+from typing import List, Dict, Any
+
+import numpy as np
 
 try:  # pragma: no cover - optional dependency
     from qdrant_client import QdrantClient  # type: ignore
@@ -9,11 +14,14 @@ except Exception:  # noqa: S110
     VectorParams = Distance = PointStruct = Filter = FieldCondition = MatchValue = None  # type: ignore
 
 from .embedder import get_embedder
+from .pdf_loader import pdf_to_ingest_items, PdfLoaderUnavailable, txt_to_ingest_items
 from ..types import IngestItem, SourceItem
 from ..config import settings
 from ..utils import deterministic_point_id, text_hash
 
 _qdrant = None
+
+logger = logging.getLogger("uvicorn.error").getChild("legal_ai.ingest")
 
 def _require_qdrant() -> None:
     if QdrantClient is None:
@@ -82,14 +90,106 @@ def rag_search_ru(query: str, top_k: int = 8) -> List[SourceItem]:
 
 def ingest_sample_from_file():
     ensure_collection()
-    path = "/workspace/corpus/ru_sample.jsonl"
-    if not os.path.exists(path):
+
+    start_ts = time.time()
+    events: List[Dict[str, Any]] = []
+
+    def record(stage: str, **extra: Any) -> None:
+        elapsed_ms = int((time.time() - start_ts) * 1000)
+        payload = {"stage": stage, "elapsed_ms": elapsed_ms, **extra}
+        events.append(payload)
+        details = ", ".join(f"{k}={v}" for k, v in extra.items())
+        if details:
+            logger.info("[ingest] %s (%s)", stage, details)
+        else:
+            logger.info("[ingest] %s", stage)
+
+    record("start")
+    record("ensure_collection")
+
+    path = Path("/workspace/corpus/ru_sample.jsonl")
+    if not path.exists():
         raise FileNotFoundError("Файл corpus/ru_sample.jsonl не найден")
+
     items: List[IngestItem] = []
-    with open(path, "r", encoding="utf-8") as f:
+    jsonl_records = 0
+    with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line: continue
+            if not line:
+                continue
             data = json.loads(line)
             items.append(IngestItem(**data))
-    return ingest_items(items)
+            jsonl_records += 1
+    record("jsonl_loaded", records=jsonl_records)
+
+    pdf_dir = Path("/workspace/corpus/Законодательные акты")
+    pdf_files = 0
+    pdf_chunks = 0
+    pdf_errors: List[Dict[str, Any]] = []
+    if pdf_dir.exists():
+        pdf_paths = sorted(pdf_dir.rglob("*.pdf"))
+        record("pdf_scan", files=len(pdf_paths))
+        for idx, pdf_path in enumerate(pdf_paths, start=1):
+            record("pdf_parse_start", file=str(pdf_path), index=idx)
+            try:
+                pdf_items = pdf_to_ingest_items(pdf_path)
+            except PdfLoaderUnavailable as exc:
+                pdf_errors.append({"file": str(pdf_path), "error": str(exc)})
+                record("pdf_loader_unavailable", file=str(pdf_path))
+                break
+            except Exception as exc:  # noqa: BLE001 - логируем и продолжаем
+                pdf_errors.append({"file": str(pdf_path), "error": str(exc)})
+                record("pdf_parse_error", file=str(pdf_path), error=str(exc))
+                continue
+            if not pdf_items:
+                record("pdf_empty", file=str(pdf_path))
+                continue
+            items.extend(pdf_items)
+            pdf_files += 1
+            pdf_chunks += len(pdf_items)
+            record("pdf_parsed", file=str(pdf_path), chunks=len(pdf_items))
+
+    txt_dir = Path("/workspace/corpus")
+    txt_files = 0
+    txt_chunks = 0
+    txt_errors: List[Dict[str, Any]] = []
+    txt_paths = sorted(p for p in txt_dir.rglob("*.txt") if p.is_file())
+    if txt_paths:
+        record("txt_scan", files=len(txt_paths))
+    for idx, txt_path in enumerate(txt_paths, start=1):
+        rel_parts = txt_path.relative_to(txt_dir).parts
+        if any(part.startswith(".") for part in rel_parts):
+            continue
+        record("txt_parse_start", file=str(txt_path), index=idx)
+        try:
+            txt_items = txt_to_ingest_items(txt_path)
+        except Exception as exc:  # noqa: BLE001 - логируем и продолжаем
+            txt_errors.append({"file": str(txt_path), "error": str(exc)})
+            record("txt_parse_error", file=str(txt_path), error=str(exc))
+            continue
+        if not txt_items:
+            record("txt_empty", file=str(txt_path))
+            continue
+        items.extend(txt_items)
+        txt_files += 1
+        txt_chunks += len(txt_items)
+        record("txt_parsed", file=str(txt_path), chunks=len(txt_items))
+
+    res = ingest_items(items)
+    record("upsert_complete", ingested=res.get("ingested", 0))
+
+    res.update({
+        "jsonl_records": jsonl_records,
+        "pdf_files": pdf_files,
+        "pdf_chunks": pdf_chunks,
+        "txt_files": txt_files,
+        "txt_chunks": txt_chunks,
+        "duration_ms": int((time.time() - start_ts) * 1000),
+        "events": events,
+    })
+    if pdf_errors:
+        res["pdf_errors"] = pdf_errors
+    if txt_errors:
+        res["txt_errors"] = txt_errors
+    return res

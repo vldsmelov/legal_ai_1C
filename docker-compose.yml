@@ -9,6 +9,17 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__GPU__DISABLED=false
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]
     restart: unless-stopped
 
   backend:

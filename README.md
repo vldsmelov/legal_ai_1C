@@ -33,13 +33,13 @@ backend/
 │ ├─ rag/embedder.py # BGE-M3 (GPU/CPU auto)
 │ ├─ rag/store.py # Qdrant: ingest/search
 │ ├─ rerank.py # bge-reranker-v2-m3 (GPU)
-+│ ├─ rag/html_extract.py # общий HTML→текст парсер + чанкование
-+│ ├─ rag/pub_pravo.py # site-aware парсер публикаций (Статья/Часть/Пункт)
+│ ├─ rag/html_extract.py # общий HTML→текст парсер + чанкование
+│ ├─ rag/pub_pravo.py # site-aware парсер публикаций (Статья/Часть/Пункт)
 │ └─ routes/
 │ ├─ health.py # GET /health
 │ ├─ ingest.py # POST /rag/ingest(_sample)
-│ └─ analyze.py # POST /analyze, /generate
-+│ └─ connectivity.py # GET /net/check, GET /net/fetch
+│ ├─ analyze.py # POST /analyze, /generate
+│ └─ connectivity.py # GET /net/check, GET /net/fetch
 corpus/
 └─ ru_sample.jsonl # демо-НПА
 ```
@@ -55,6 +55,9 @@ ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 
 # 2) Поднять стек
 docker compose up -d --build
+
+# проверить, что Qdrant видит GPU
+docker compose exec qdrant nvidia-smi
 
 # 3) Проверить здоровье
 curl -s http://localhost:8087/health | jq
@@ -87,6 +90,41 @@ docker compose up -d backend
 ```
 
 > Примечание: backend ожидает, что Ollama доступна по `http://localhost:11434`. В docker-compose.yml добавлен `extra_hosts: host.docker.internal:host-gateway`, поэтому сервис внутри контейнера обращается к Ollama на машине-хосте по адресу `http://host.docker.internal:11434`.
+
+### Подробный сценарий первого запуска
+
+1. **Подготовьте окружение.** Понадобятся Docker, Docker Compose, NVIDIA Container Toolkit (для проброса GPU в контейнеры) и локально установленный Ollama. Проверьте, что образы `qdrant/qdrant:v1.9.0` и `nvcr.io/nvidia/pytorch` (для GPU-сборки) доступны или могут быть скачаны из сети.
+2. **Прогрейте LLM.** Выполните `ollama pull krith/qwen2.5-32b-instruct:IQ4_XS`, чтобы модель была готова до старта контейнеров.
+3. **Соберите и поднимите стек.** Перейдите в корень репозитория и выполните `docker compose up -d --build`. Первый запуск может занять 5–10 минут из‑за скачивания зависимостей и установки Python-пакетов.
+4. **Убедитесь, что все сервисы поднялись.** Команда `docker compose ps` должна показать контейнеры `backend`, `qdrant` и `ollama` со статусом `running`. Если какой-либо сервис падает, посмотрите логи `docker compose logs <service>`. Дополнительно проверьте, что `qdrant` видит GPU: `docker compose exec qdrant nvidia-smi`.
+5. **Проверьте API /health.** Убедитесь, что backend отвечает: `curl -s http://localhost:8087/health | jq`. В ответе `"status": "ok"` и перечисление внутренних проверок (`ollama`, `qdrant`, `embedder`, `reranker`).
+6. **Загрузите исходные документы.** Выполните `curl -s -X POST http://localhost:8087/rag/ingest_sample | jq`. Эндпоинт загружает демо-корпус `corpus/ru_sample.jsonl`, разбирает локальные PDF из `corpus/Законодательные акты/*.pdf` и автоматически добавляет все `*.txt` из `corpus/**`. В ответе появятся счётчики по каждому типу файлов (`jsonl_records`, `pdf_files`, `txt_files`), массив `events` с поэтапным прогрессом и предупреждения (если какой-то файл не распарсился). В логах backend теперь выводится та же хронология загрузки.
+7. **Повторно проверьте здоровье после ingest.** Если в ходе загрузки Qdrant был перезапущен, повторите `curl -s http://localhost:8087/health | jq` — все статусы должны быть `ok`.
+
+### Как отправить файл на анализ
+
+1. **Подготовьте текстовый файл договора.** Backend ожидает plain-text (`.txt`) в кодировке UTF-8 или CP1251. Если договор в PDF или DOCX, конвертируйте его в текст (например, через `pandoc` или офисный пакет) и сохраните в каталоге репозитория, например `samples/my_contract.txt`.
+2. **Вызовите сервис компактизации и анализа.** Используйте вспомогательный эндпоинт `/doc/analyze_file`, который сам нарежет документ, вызовет `/analyze` и (по желанию) соберёт HTML-отчёт:
+   ```bash
+   curl -s -X POST http://localhost:8087/doc/analyze_file \
+     -H "Content-Type: application/json" \
+     -d '{
+       "path": "samples/my_contract.txt",
+       "jurisdiction": "RU",
+       "contract_type": "услуги",
+       "language": "ru",
+       "max_tokens": 600,
+       "report_format": "html",
+       "report_save": true,
+       "report_inline": false
+     }' | jq
+   ```
+   Параметр `path` указывается относительно `/workspace` внутри контейнера, поэтому файл должен быть доступен в проекте (можно смонтировать дополнительную директорию в `docker-compose.yml`).
+3. **Интерпретируйте ответ.** В JSON придут:
+   - `source_path`, `original_bytes`, `compact_bytes` — сведения о размере исходного файла и собранного компактного текста;
+   - `analysis` — полный ответ `/analyze` с полями `score_total`, `verdict`, `issues`, `section_scores`, `sources`;
+   - `report_path` — путь к сохранённому HTML-отчёту (если `report_save=true`). Файл появится в каталоге `reports/` внутри контейнера и будет смонтирован в рабочую директорию.
+4. **Проверка успешности.** При успешном анализе статус HTTP 200, `analysis.verdict` принимает значения `ok` | `needs_review` | `high_risk`. Ошибки Ollama или Qdrant вернутся в поле `error` с пояснением; в таком случае проверьте логи `docker compose logs backend` и повторите запрос.
 
 ### Если Qdrant не стартует
 
