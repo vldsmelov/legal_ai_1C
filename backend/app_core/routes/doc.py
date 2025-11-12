@@ -2,10 +2,9 @@
 from __future__ import annotations
 from fastapi import APIRouter, Body, UploadFile, File, Form, HTTPException
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import httpx, re
 
-from ..report.render import render_html, save_report_html
 from ..paths import LOCAL_FILES_BASE, resolve_under
 
 
@@ -77,6 +76,16 @@ async def _analyze_raw_text(
         contract_type,
         language,
         max_tokens,
+        report_format,
+        report_save,
+        report_inline,
+        report_name,
+        {
+            "source_path": source_label,
+            "compact_preview": compact,
+            "original_bytes": len(raw.encode("utf-8", errors="ignore")),
+            "compact_bytes": len(compact.encode("utf-8", errors="ignore")),
+        },
     )
 
     resp = {
@@ -87,21 +96,10 @@ async def _analyze_raw_text(
         "analysis": analysis,
     }
 
-    if (report_format or "").lower() == "html":
-        html_str = render_html(
-            meta={
-                "source_path": source_label,
-                "compact_preview": compact,
-                "original_bytes": resp["original_bytes"],
-                "compact_bytes": resp["compact_bytes"],
-            },
-            analysis=analysis,
-        )
-        if report_save:
-            out = save_report_html(html_str, report_name or Path(source_label).stem or "report")
-            resp["report_path"] = out
-        if report_inline:
-            resp["report_html"] = html_str
+    if analysis.get("report_path"):
+        resp["report_path"] = analysis["report_path"]
+    if analysis.get("report_html"):
+        resp["report_html"] = analysis["report_html"]
 
     return resp
 
@@ -205,15 +203,35 @@ def build_compact(sections: Dict[str, List[str]],
 
 
 
-async def _call_analyze(compact_text: str,
-                        jurisdiction: str, contract_type: str, language: str, max_tokens: int) -> dict:
-    payload = {
+async def _call_analyze(
+    compact_text: str,
+    jurisdiction: str,
+    contract_type: str,
+    language: str,
+    max_tokens: int,
+    report_format: str | None,
+    report_save: bool,
+    report_inline: bool,
+    report_name: str | None,
+    report_meta: Optional[Dict[str, Any]] = None,
+) -> dict:
+    payload: Dict[str, Any] = {
         "contract_text": compact_text,
         "jurisdiction": jurisdiction,
         "contract_type": contract_type,
         "language": language,
-        "max_tokens": max_tokens
+        "max_tokens": max_tokens,
     }
+    if report_format:
+        payload["report_format"] = report_format
+    if report_save is not None:
+        payload["report_save"] = report_save
+    if report_inline is not None:
+        payload["report_inline"] = report_inline
+    if report_name:
+        payload["report_name"] = report_name
+    if report_meta:
+        payload["report_meta"] = report_meta
     # Большой таймаут на чтение/запись для больших документов
     timeout = httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=300.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
