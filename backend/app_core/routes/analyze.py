@@ -146,6 +146,59 @@ async def _call_business_model(req: AnalyzeRequest, max_tokens: int) -> Dict[str
     return await ollama_chat_json(biz_sys, biz_usr, req.model, max_tokens=max_tokens)
 
 
+def _ensure_section_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure that business payload contains all sections with sane defaults."""
+
+    payload = dict(payload or {})
+
+    raw_sections = payload.get("sections") if isinstance(payload.get("sections"), list) else []
+    prepared: Dict[str, Dict[str, Any]] = {}
+    for item in raw_sections:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        if not key:
+            continue
+        try:
+            raw_val = int(item.get("raw", 0))
+        except (TypeError, ValueError):
+            raw_val = 0
+        raw_val = max(0, min(5, raw_val))
+        comment = item.get("comment")
+        if not isinstance(comment, str):
+            comment = ""
+        prepared[str(key)] = {
+            "key": str(key),
+            "raw": raw_val,
+            "comment": comment.strip(),
+        }
+
+    sections: List[Dict[str, Any]] = []
+    for section in get_section_defs():
+        entry = prepared.get(section["key"])
+        if entry is None:
+            entry = {
+                "key": section["key"],
+                "raw": 0,
+                "comment": "модель не сформировала оценку по этому разделу.",
+            }
+        sections.append(entry)
+
+    payload["sections"] = sections
+
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        payload["issues"] = []
+
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        payload["summary"] = (
+            "Автоматическое резюме не сформировано моделью; разделы оценены с минимальными значениями."
+        )
+
+    return payload
+
+
 async def _generate_business_payload(req: AnalyzeRequest) -> Dict[str, Any]:
     attempts: List[int] = []
     base = req.max_tokens or settings.BUSINESS_MAX_TOKENS
@@ -160,9 +213,9 @@ async def _generate_business_payload(req: AnalyzeRequest) -> Dict[str, Any]:
         except Exception:
             continue
         if _has_all_sections(payload):
-            return payload
+            return _ensure_section_payload(payload)
         last_payload = payload or {}
-    return last_payload
+    return _ensure_section_payload(last_payload)
 
 
 def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]:
