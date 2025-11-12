@@ -47,7 +47,7 @@ class Settings:
 
         # RAG
         self.QDRANT_URL = os.getenv("QDRANT_URL") or rag_cfg.get("qdrant_url", "http://127.0.0.1:6333")
-        self.QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION") or rag_cfg.get("collection", "ru_law_m3")
+        self.QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION") or rag_cfg.get("collection", "docs")
         self.EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL") or rag_cfg.get("embedding_model", "BAAI/bge-m3")
         rag_top_k_env = os.getenv("RAG_TOP_K")
         self.RAG_TOP_K = int(rag_top_k_env) if rag_top_k_env is not None else int(rag_cfg.get("top_k", 8))

@@ -80,6 +80,16 @@ class NarrativeBlock(BaseModel):
     recommendations: List[str] = Field(default_factory=list)
 
 
+class PipelineStep(BaseModel):
+    step: int = Field(description="Порядковый номер шага обработки")
+    name: str = Field(description="Краткое имя шага")
+    description: str = Field(description="Что делаем на этом шаге")
+    target_url: str = Field(description="Адрес конечной точки")
+    method: str = Field(description="HTTP метод или тип обращения")
+    status: str = Field(description="Краткий статус выполнения шага")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Доп. данные")
+
+
 # Responses
 class AnalyzeResponse(BaseModel):
     score_total: int
@@ -105,6 +115,14 @@ class AnalyzeResponse(BaseModel):
     overview: DocumentOverview
     law_narrative: NarrativeBlock
     business_narrative: NarrativeBlock
+    llm_calls: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Отладочная информация: система/юзер промпты и сырые ответы LLM",
+    )
+    pipeline: List[PipelineStep] = Field(
+        default_factory=list,
+        description="Последовательность обращений к внешним сервисам и внутренним шагам",
+    )
     report_path: Optional[str] = Field(
         default=None, description="Полный путь до сохранённого HTML-отчёта"
     )
