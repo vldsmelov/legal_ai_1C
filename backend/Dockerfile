@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir --pre \
         --index-url https://download.pytorch.org/whl/nightly/cu130 \
         --extra-index-url https://pypi.org/simple \
-        torch torchvision torchaudio && \
+        torch && \
     pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY . /opt/app

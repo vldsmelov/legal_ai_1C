@@ -79,6 +79,8 @@ docker compose down --remove-orphans
 docker compose build --no-cache backend
 docker compose up -d
 
+> Перед первым запуском убедитесь, что образ `qdrant/qdrant:v1.9.0` доступен локально (его можно заранее подтянуть командой `docker pull qdrant/qdrant:v1.9.0`).
+
 # 7) Пересобрать после обновления зависимостей
 docker compose build backend
 docker compose up -d backend

@@ -39,6 +39,8 @@ docker compose build --no-cache backend
 docker compose up -d
 ```
 
+> **Важно:** стек ожидает образ `qdrant/qdrant:v1.9.0`. Если образ не был ранее загружен, выполните `docker pull qdrant/qdrant:v1.9.0` перед `docker compose up` или позвольте Compose сделать это автоматически.
+
 ### Обновление зависимостей
 
 Добавьте или обновите зависимости в `backend/requirements.txt`, затем выполните:

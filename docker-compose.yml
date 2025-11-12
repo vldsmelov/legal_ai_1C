@@ -2,7 +2,7 @@ name: legal_ai_1c
 
 services:
   qdrant:
-    image: qdrant/qdrant:1.10.3
+    image: qdrant/qdrant:v1.9.0
     container_name: qdrant
     ports:
       - "6333:6333"
