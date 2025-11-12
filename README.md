@@ -88,6 +88,23 @@ docker compose up -d backend
 
 > Примечание: backend ожидает, что Ollama доступна по `http://localhost:11434`. В docker-compose.yml добавлен `extra_hosts: host.docker.internal:host-gateway`, поэтому сервис внутри контейнера обращается к Ollama на машине-хосте по адресу `http://host.docker.internal:11434`.
 
+### Если Qdrant не стартует
+
+После обновлений образа или неудачного завершения работы том `legal_ai_1c_qdrant_data` может содержать неконсистентные данные. В таком случае `docker compose up` выводит ошибку вроде:
+
+```
+qdrant | ERROR qdrant::startup: Panic occurred ... Failed to (de)serialize from/to json: invalid type: sequence, expected a map
+```
+
+Очистите том и поднимите контейнер заново:
+
+```bash
+./scripts/reset_qdrant_volume.sh
+docker compose up -d qdrant
+```
+
+Скрипт остановит и удалит контейнер Qdrant (если он есть), после чего очистит именованный том и напомнит перезапустить сервис. Это гарантирует, что Docker больше не держит том занятым (иначе при удалении появится ошибка вида `volume is in use`). Перед очисткой сделайте бэкап, если в Qdrant были нужные данные.
+
 ---
 
 
