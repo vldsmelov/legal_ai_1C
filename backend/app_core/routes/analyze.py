@@ -2,12 +2,11 @@ from typing import List, Dict, Any
 
 from fastapi import APIRouter, HTTPException
 
-from ..types import GenerateRequest, AnalyzeRequest, AnalyzeResponse, SectionScore, SourceItem
+from ..types import AnalyzeRequest, AnalyzeResponse, SectionScore, SourceItem
 from ..config import settings
-from ..llm.ollama import ollama_generate, ollama_chat_json
+from ..llm.ollama import ollama_chat_json
 from ..prompts import get_prompt_template, render_prompt
 from ..rag.store import rag_search_ru
-from ..rerank import apply_rerank
 from ..scoring import (
     build_focus,
     compute_total_and_color,
@@ -203,15 +202,6 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
     }
 
 
-@router.post("/generate")
-async def generate(body: GenerateRequest):
-    try:
-        text = await ollama_generate(body.prompt, body.max_tokens or 512, body.model)
-        return {"model": body.model or settings.OLLAMA_MODEL, "text": text}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
-
-
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
     # 1) RAG — проверка по законодательству
@@ -220,14 +210,6 @@ async def analyze(req: AnalyzeRequest):
     except Exception:
         ctx = []
     ctx = dedup_sources_by_hash(ctx)
-    # 1.1) rerank
-    try:
-        keep = min(settings.RERANK_KEEP, len(ctx))
-        ctx = apply_rerank(req.contract_text, ctx, keep=keep)
-        ctx = dedup_sources_by_hash(ctx)
-    except Exception as e:
-        print("[RERANK] failed:", e)
-
     # 2) LLM — юридическая оценка с контекстом RAG
     sys = law_system_prompt(req)
     usr = law_user_prompt(req, ctx)

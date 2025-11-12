@@ -1,14 +1,12 @@
 # backend/app_core/routes/doc.py
 from __future__ import annotations
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-import httpx, re, os
-
-import anyio
-import contextlib
+import httpx, re
 
 from ..report.render import render_html, save_report_html
+from ..paths import LOCAL_FILES_BASE, resolve_under
 
 
 router = APIRouter(prefix="/doc", tags=["doc"])
@@ -164,7 +162,11 @@ async def _call_analyze(compact_text: str,
 
 @router.post("/analyze_file")
 async def analyze_file(
-    path: str = Body(..., embed=True, description="Относительно /workspace, напр. 'samples/my_contract.txt'"),
+    path: str = Body(
+        ...,
+        embed=True,
+        description="Путь к файлу относительно LEGAL_AI_LOCAL_BASE (по умолчанию корень проекта)",
+    ),
     jurisdiction: str = Body("RU", embed=True),
     contract_type: str = Body("услуги", embed=True),
     language: str = Body("ru", embed=True),
@@ -176,8 +178,10 @@ async def analyze_file(
     report_inline: bool = Body(False, embed=True),
     report_name: str | None = Body(None, embed=True),
 ):
-    base = Path("/workspace")
-    p = Path(path) if Path(path).is_absolute() else base / path
+    try:
+        p = resolve_under(LOCAL_FILES_BASE, path)
+    except ValueError as exc:
+        return {"error": str(exc)}
     if not p.exists():
         return {"error": f"file not found: {p}"}
     raw = _read_text_file(p)
@@ -206,84 +210,3 @@ async def analyze_file(
 
     return resp 
 
-@router.post("/analyze_url")
-async def analyze_url(
-    url: str = Body(..., embed=True),
-    allow_http_downgrade: bool = Body(True, embed=True),
-    timeout: float = Body(15.0, embed=True),
-    max_bytes: int = Body(5_000_000, embed=True),
-    jurisdiction: str = Body("RU", embed=True),
-    contract_type: str = Body("услуги", embed=True),
-    language: str = Body("ru", embed=True),
-    max_tokens: int = Body(600, embed=True),
-    per_section_limit: int = Body(2200, embed=True),
-    total_limit: int = Body(20000, embed=True),
-    report_format: str | None = Body(None, embed=True),
-    report_save: bool = Body(False, embed=True),
-    report_inline: bool = Body(False, embed=True),
-    report_name: str | None = Body(None, embed=True),
-):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) LegalAI/0.6 docfetch",
-        "Accept": "text/plain, text/*;q=0.9, */*;q=0.8",
-    }
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=min(5.0, timeout), read=timeout)) as client:
-        async def get(u: str):
-            async with client.stream("GET", u, headers=headers, follow_redirects=True) as r:
-                total, chunks = 0, []
-                async for c in r.aiter_bytes():
-                    if not c: break
-                    total += len(c)
-                    if total > max_bytes:
-                        c = c[: max(0, max_bytes - (total - len(c)))]
-                        total = max_bytes
-                    chunks.append(c)
-                    if total >= max_bytes: break
-                body = b"".join(chunks)
-                return r, body
-        try:
-            r, body = await get(url)
-        except httpx.RequestError as e:
-            if allow_http_downgrade and url.startswith("https://"):
-                r, body = await get("http://" + url[len("https://"):])
-            else:
-                return {"error": f"download: {e}", "url": url}
-
-    if not body:
-        return {"error": "empty body", "url": url}
-
-    # Расчётно ожидаем text/plain; но если пришёл HTML — чуть подчистим теги
-    text = body.decode("utf-8", errors="replace")
-    if "<html" in text.lower():
-        # очень простой «анти-HTML» — оставим только текст
-        text = re.sub(r"(?s)<script.*?</script>", " ", text, flags=re.I)
-        text = re.sub(r"(?s)<style.*?</style>", " ", text, flags=re.I)
-        text = re.sub(r"(?s)<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-
-    sections = extract_sections(text)
-    compact = build_compact(sections, per_section_limit=per_section_limit, total_limit=total_limit)
-    analysis = await _call_analyze(compact, jurisdiction, contract_type, language, max_tokens)
-
-    resp = {
-        "source_url": url,
-        "http_status": getattr(r, "status_code", None),
-        "final_url": str(getattr(r, "url", url)),
-        "original_bytes": len(text.encode("utf-8", errors="ignore")),
-        "compact_bytes": len(compact.encode("utf-8", errors="ignore")),
-        "compact_preview": compact[:800],
-        "analysis": analysis
-    }
-
-    if (report_format or "").lower() == "html":
-        html_str = render_html(
-            meta={"source_url": url, "compact_preview": compact, "original_bytes": resp["original_bytes"], "compact_bytes": resp["compact_bytes"]},
-            analysis=analysis
-        )
-        if report_save:
-            out = save_report_html(html_str, report_name or "document")
-            resp["report_path"] = out
-        if report_inline:
-            resp["report_html"] = html_str
-
-    return resp

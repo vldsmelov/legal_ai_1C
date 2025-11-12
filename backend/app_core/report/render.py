@@ -2,10 +2,10 @@
 from __future__ import annotations
 from typing import Dict, Any, List
 from datetime import datetime
-from pathlib import Path
 import re
 import html
 
+from ..paths import REPORT_OUTPUT_DIR
 
 def _risk_badge(color: str) -> str:
     color = (color or "").lower()
@@ -319,7 +319,7 @@ def render_html(meta: Dict[str, Any], analysis: Dict[str, Any]) -> str:
 def save_report_html(html_str: str, name: str | None = None) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name or "report")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    outdir = Path("/workspace/reports")
+    outdir = REPORT_OUTPUT_DIR
     outdir.mkdir(parents=True, exist_ok=True)
     path = outdir / f"{ts}_{safe}.html"
     path.write_text(html_str, encoding="utf-8")

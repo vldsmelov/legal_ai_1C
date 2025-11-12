@@ -1,12 +1,6 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
-# Requests
-class GenerateRequest(BaseModel):
-    prompt: str
-    max_tokens: Optional[int] = 512
-    model: Optional[str] = None
-
 class AnalyzeRequest(BaseModel):
     contract_text: str = Field(..., description="Текст договора/выдержки")
     jurisdiction: str = Field("RU")

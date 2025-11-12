@@ -1,5 +1,7 @@
 from fastapi import FastAPI
-import asyncio, httpx, torch
+import asyncio
+import httpx
+
 from .config import settings
 
 def register_startup(app: FastAPI):
@@ -43,15 +45,6 @@ def register_startup(app: FastAPI):
             await asyncio.sleep(1)
         if not ok_qdrant:
             print("[startup] WARNING: qdrant not reachable")
-
-        # Torch/CUDA (без инициализации девайса)
-        try:
-            print(f"[startup] torch: {torch.__version__}, cuda.available: {torch.cuda.is_available()}, cuda.version: {torch.version.cuda}")
-            if settings.STARTUP_CUDA_NAME and torch.cuda.is_available():
-                name = torch.cuda.get_device_name(0)
-                print(f"[startup] cuda device: {name}")
-        except Exception as e:
-            print(f"[startup] torch info error: {e}")
 
         # Тест-генерация (по флагу)
         if ok_ollama and settings.SELF_CHECK_GEN:
