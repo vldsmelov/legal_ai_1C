@@ -15,8 +15,14 @@ if ! docker volume inspect "$VOLUME_NAME" >/dev/null 2>&1; then
 fi
 
 if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-  echo "Stopping running qdrant container: $CONTAINER_NAME"
-  docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  running_state=$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo "false")
+  if [ "$running_state" = "true" ]; then
+    echo "Stopping running qdrant container: $CONTAINER_NAME"
+    docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  fi
+
+  echo "Removing qdrant container: $CONTAINER_NAME"
+  docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
 fi
 
 echo "Removing volume '$VOLUME_NAME'"
