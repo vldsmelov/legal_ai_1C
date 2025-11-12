@@ -2,7 +2,7 @@ name: legal_ai_1c
 
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.9.0
     container_name: qdrant
     ports:
       - "6333:6333"
@@ -16,8 +16,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: legal-ai/backend-base:cu130
     container_name: backend
     environment:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434

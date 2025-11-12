@@ -74,27 +74,19 @@ curl -s -X POST http://localhost:8087/analyze \
     "max_tokens": 512
   }' | jq
 
-# 6) Полная пересборка c базовым образом
+# 6) Полная пересборка backend-образа
 docker compose down --remove-orphans
-# при необходимости удалите старые образы: docker rmi legal-ai/backend:dev legal-ai/backend-base:cu130
-docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
 docker compose build --no-cache backend
 docker compose up -d
 
-# 7) Обновить только лёгкие зависимости (requirements.txt)
+> Перед первым запуском убедитесь, что образ `qdrant/qdrant:v1.9.0` доступен локально (его можно заранее подтянуть командой `docker pull qdrant/qdrant:v1.9.0`).
+
+# 7) Пересобрать после обновления зависимостей
 docker compose build backend
 docker compose up -d backend
 ```
 
 > Примечание: backend ожидает, что Ollama доступна по `http://localhost:11434`. В docker-compose.yml добавлен `extra_hosts: host.docker.internal:host-gateway`, поэтому сервис внутри контейнера обращается к Ollama на машине-хосте по адресу `http://host.docker.internal:11434`.
-
-### Разделение зависимостей
-
-- `backend/Dockerfile.base` + `backend/requirements.base.txt` — тяжёлые пакеты (PyTorch, HuggingFace), которые ставятся редко.
-- `backend/Dockerfile` + `backend/requirements.txt` — лёгкие зависимости FastAPI, которые можно обновлять без пересборки base-образа.
-
-Добавили новую лёгкую библиотеку? Обновите `backend/requirements.txt`, затем `docker compose build backend && docker compose up -d backend`.
-Поменяли версию тяжёлого пакета? Обновите `backend/requirements.base.txt`, после чего пересоберите базовый образ и backend.
 
 ---
 
