@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from ..types import IngestItem, IngestPayload  
 from ..config import settings
 
-from ..rag.store import ingest_items, ensure_collection
+from ..rag.store import ingest_items, ensure_collection, ingest_sample_from_file
 from ..rag.pub_pravo import parse_publication_html
 from ..rag.gk_txt import parse_gk_file
 
@@ -19,20 +19,12 @@ router = APIRouter(prefix="/rag")
 @router.post("/ingest_sample")
 def rag_ingest_sample():
     """
-    Загружает demo-корпус из corpus/ru_sample.jsonl
+    Загружает demo-корпус и локальные PDF-документы из /workspace/corpus.
     """
-    ensure_collection()
-    import json, pathlib, hashlib
-    p = pathlib.Path("/workspace/corpus/ru_sample.jsonl")
-    if not p.exists():
-        return {"error": f"not found: {p}"}
-    items: List[IngestItem] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        d = json.loads(line)
-        items.append(IngestItem(**d))
-    return ingest_items(items)
+    try:
+        return ingest_sample_from_file()
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
 
 
 @router.post("/ingest")
