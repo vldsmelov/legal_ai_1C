@@ -49,52 +49,58 @@ corpus/
 ## Быстрый старт
 
 ```bash
-# 1) Модель для Ollama
-# (сервис Ollama должен быть запущен и слушать http://localhost:11434)
+# 1) Подготовьте Ollama на хосте (http://localhost:11434)
 ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 
-# 2) Поднять стек
+# 2) Укажите переменные окружения Compose (пример — см. ниже)
+cp docs/examples/.env.example .env
+
+# 3) Соберите и поднимите стек (нужен GPU + nvidia-container-toolkit)
 docker compose up -d --build
 
-# 3) Проверить здоровье
+# 4) Проверка здоровья
 curl -s http://localhost:8087/health | jq
 
-# 4) Загрузить демо-НПА
+# 5) Загрузите демо-НПА в Qdrant
 mkdir -p corpus
 curl -s -X POST http://localhost:8087/rag/ingest_sample | jq
 
-# 5) Пробный анализ
+# 6) Пробный анализ договора
 curl -s -X POST http://localhost:8087/analyze \
   -H "Content-Type: application/json" \
   -d '{
-    "contract_text": "ДОГОВОР УСЛУГ ... (см. примеры ниже)",
+    "contract_text": "ДОГОВОР УСЛУГ ...",
     "jurisdiction": "RU",
     "contract_type": "услуги",
     "language": "ru",
     "max_tokens": 512
   }' | jq
 
-# 6) Полная пересборка c базовым образом
+# 7) Полная пересборка backend-образа
 docker compose down --remove-orphans
-# при необходимости удалите старые образы: docker rmi legal-ai/backend:dev legal-ai/backend-base:cu130
-docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
 docker compose build --no-cache backend
 docker compose up -d
 
-# 7) Обновить только лёгкие зависимости (requirements.txt)
+# 8) Быстрая пересборка после изменения зависимостей
 docker compose build backend
 docker compose up -d backend
 ```
 
-> Примечание: backend ожидает, что Ollama доступна по `http://localhost:11434`. В docker-compose.yml добавлен `extra_hosts: host.docker.internal:host-gateway`, поэтому сервис внутри контейнера обращается к Ollama на машине-хосте по адресу `http://host.docker.internal:11434`.
+> Образ Qdrant закреплён на `qdrant/qdrant:v1.9.0`. Если он ещё не скачан, выполните `docker pull qdrant/qdrant:v1.9.0` перед первым запуском или доверьте это `docker compose`.
 
-### Разделение зависимостей
+> Backend обращается к Ollama на хосте по `http://host.docker.internal:11434` (передаётся через `extra_hosts`).
 
-- `backend/Dockerfile.base` + `backend/requirements.base.txt` — тяжёлые пакеты (PyTorch, HuggingFace), которые ставятся редко.
-- `backend/Dockerfile` + `backend/requirements.txt` — лёгкие зависимости FastAPI, которые можно обновлять без пересборки base-образа.
+---
 
-Добавили новую лёгкую библиотеку? Обновите `backend/requirements.txt`, затем `docker compose build backend && docker compose up -d backend`.
-Поменяли версию тяжёлого пакета? Обновите `backend/requirements.base.txt`, после чего пересоберите базовый образ и backend.
+### Docker-окружение backend
+
+- Базовый образ: `nvidia/cuda:13.0.0-runtime-ubuntu24.04` (CUDA 13, Ubuntu 24.04).
+- В контейнере разворачивается Python 3.12 в изолированном виртуальном окружении (`/opt/venv`).
+- PyTorch nightly устанавливается из индекса `https://download.pytorch.org/whl/nightly/cu130` (без `torchvision/torchaudio`).
+- Остальные зависимости — из `backend/requirements.txt` (актуальные версии, только используемые пакеты).
+- Для работы требуется `nvidia-container-toolkit`; запустите контейнеры с флагом `--gpus all` (Compose делает это через `deploy.resources`).
+
+> При необходимости дополнительной отладки можно запустить образ напрямую: `docker run --rm -it --gpus all legal-ai/backend:dev bash`.
 
 ---
 

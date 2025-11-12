@@ -2,16 +2,16 @@
 
 ## 1) Требования
 
-- ОС: Ubuntu 22.04+ / Debian 12+ / аналогичный Linux.
+- ОС: Ubuntu 22.04+ / Debian 12+ или другой Linux с поддержкой NVIDIA.
 - Docker Engine 27+, Docker Compose 2.39+.
 - NVIDIA GPU (RTX 5090) + драйверы + nvidia-container-toolkit.
-- CUDA userspace для PyTorch nightly cu130 (в образ уже встроено).
+- CUDA userspace соответствует образу `nvidia/cuda:13.0.0-runtime-ubuntu24.04` (CUDA 13).
 - Доступ к сети только для начальной загрузки весов (или прогретый кэш).
 
 **Проверка GPU в Docker**:
 ```bash
 nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi
 ```
 
 **Установка nvidia-container-toolkit (если не установлен)**:
@@ -32,35 +32,55 @@ sudo systemctl restart docker
 ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 ```
 
-### Чистая сборка с базовым образом
-Если используете разделённую сборку (`backend/Dockerfile.base` + `backend/Dockerfile`):
+### Файл `.env`
+
+`docker compose` читает переменные окружения из `.env` в корне репозитория.
+Скопируйте шаблон и при необходимости отредактируйте значения (например, коллекцию Qdrant):
+
 ```bash
-# базовый образ собираем из каталога backend
-docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
-# затем соберём только backend (использует BASE_IMAGE из compose)
-docker compose build --no-cache backend
+cp docs/examples/.env.example .env
 ```
+
+### Чистая сборка backend
+```bash
+docker compose down --remove-orphans
+docker compose build --no-cache backend
+docker compose up -d
+```
+
+> **Важно:** стек использует образ `qdrant/qdrant:v1.9.0`. Если он ещё не загружен, выполните `docker pull qdrant/qdrant:v1.9.0` заранее или доверьте это Compose.
+
+### Что внутри backend-образа
+
+- Базовый слой — `nvidia/cuda:13.0.0-runtime-ubuntu24.04` (CUDA 13, Ubuntu 24.04).
+- Python 3.12 устанавливается из пакетов Ubuntu и разворачивается в виртуальном окружении `/opt/venv`.
+- PyTorch nightly (`cu130`) подтягивается напрямую из `https://download.pytorch.org/whl/nightly/cu130`.
+- Python-зависимости берутся из `backend/requirements.txt` — список очищен от неиспользуемых пакетов.
+- В образ добавлен только необходимый системный минимум (`python3-venv`, `build-essential`, `git`, `curl`, `ca-certificates`).
 
 ### Обновление зависимостей
 
-- Лёгкие пакеты: добавьте/обновите в `backend/requirements.txt`, затем выполните `docker compose build backend` и `docker compose up -d backend`.
-- Тяжёлые пакеты (PyTorch, HuggingFace и т.п.): меняем `backend/requirements.base.txt` и пересобираем базовый образ `backend/Dockerfile.base`, после чего пересобираем `backend`.
+Добавьте или обновите зависимости в `backend/requirements.txt`, затем выполните:
+```bash
+docker compose build backend
+docker compose up -d backend
+```
 
 **Поднять стек**
-```
+```bash
 export DOCKER_BUILDKIT=1
 docker compose up -d --build
 ```
 
 **Проверки**
-```
+```bash
 curl -s http://localhost:8087/health | jq
 docker logs -f backend
 ```
 
 ## 3) Кэширование весов (HF cache)
 
-**Рекомендуется смонтировать и предварительно наполнить локальный кэш**:
+**Рекомендуется смонтировать и предварительно наполнить локальный HF-кэш**:
 ```
 # docker-compose.yml
 services:
@@ -71,7 +91,8 @@ services:
 **Прогреть кэш реранкера до запуска:**
 ```
 mkdir -p .hf_cache
-docker run --rm -v "$PWD/.hf_cache:/root/.cache/huggingface" \
+docker run --rm --gpus all \
+  -v "$PWD/.hf_cache:/root/.cache/huggingface" \
   legal-ai/backend:dev \
   python - <<'PY'
 from FlagEmbedding import FlagReranker
@@ -83,8 +104,9 @@ PY
 
 ## 3.1 Сеть и фоллбэк HTTPS→HTTP
 В некоторых средах HTTPS из контейнера может быть недоступен. Для диагностики:
-```bash 
-curl -s "http://localhost:8087/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8087/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
+```bash
+curl -s "http://localhost:8087/net/check?url=https://publication.pravo.gov.ru/" | jq
+curl -s "http://localhost:8087/net/check?url=http://publication.pravo.gov.ru/" | jq
 ```
 Онлайн-ингест поддерживает автоматический даунгрейд: 
 ```bash
