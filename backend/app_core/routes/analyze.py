@@ -140,6 +140,56 @@ def _has_all_sections(payload: Dict[str, Any]) -> bool:
     return get_section_keys().issubset(keys)
 
 
+async def _call_law_model(
+    req: AnalyzeRequest, ctx: List[SourceItem], max_tokens: int
+) -> Tuple[Dict[str, Any], str, Dict[str, Any], str, str]:
+    law_sys = law_system_prompt(req)
+    law_usr = law_user_prompt(req, ctx)
+    payload, raw_text, call_meta = await ollama_chat_json(
+        law_sys, law_usr, req.model, max_tokens=max_tokens
+    )
+    return payload, raw_text, call_meta, law_sys, law_usr
+
+
+async def _generate_law_payload(
+    req: AnalyzeRequest, ctx: List[SourceItem]
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    attempts: List[int] = []
+    base = req.max_tokens or settings.LAW_MAX_TOKENS
+    attempts.append(max(base, 512))
+    attempts.append(max(base + settings.LAW_RETRY_STEP, base))
+
+    last_payload: Dict[str, Any] = {}
+    debug_calls: List[Dict[str, Any]] = []
+    for attempt_idx, tokens in enumerate(attempts, start=1):
+        try:
+            payload, raw_text, call_meta, law_sys, law_usr = await _call_law_model(
+                req, ctx, tokens
+            )
+        except Exception:
+            continue
+        debug_calls.append(
+            {
+                "kind": "law",
+                "attempt": attempt_idx,
+                "max_tokens": tokens,
+                "parsed_response": payload,
+                "system_prompt": law_sys,
+                "user_prompt": law_usr,
+                "raw_response": raw_text,
+                "endpoint": call_meta.get("endpoint"),
+                "endpoint_url": call_meta.get("url")
+                or f"{settings.OLLAMA_URL}/api/{call_meta.get('endpoint', 'chat')}",
+                "model": req.model or settings.OLLAMA_MODEL,
+            }
+        )
+        if _has_all_sections(payload):
+            return payload, debug_calls
+        last_payload = payload or {}
+
+    return last_payload, debug_calls
+
+
 async def _call_business_model(
     req: AnalyzeRequest, max_tokens: int
 ) -> Tuple[Dict[str, Any], str, Dict[str, Any], str, str]:
@@ -321,79 +371,85 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
     }
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest):
-    # 1) RAG — проверка по законодательству
-    rag_error: Dict[str, Any] | None = None
-    try:
-        ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
-    except Exception as exc:
-        ctx = []
-        rag_error = {"error": str(exc)}
-    ctx = dedup_sources_by_hash(ctx)
+async def _run_analysis(req: AnalyzeRequest, *, use_rag: bool) -> AnalyzeResponse:
     llm_calls: List[Dict[str, Any]] = []
     pipeline: List[Dict[str, Any]] = []
     step_counter = 1
 
-    pipeline.append(
-        {
-            "step": step_counter,
-            "name": "rag_vector_search",
-            "description": "Поиск нормативных актов в Qdrant по вектору запроса",
-            "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
-            "method": "POST",
-            "status": "error" if rag_error else ("ok" if ctx else "no_matches"),
-            "details": {
-                "top_k": settings.RAG_TOP_K,
-                "hits": len(ctx),
-                "collection": settings.QDRANT_COLLECTION,
-                "embedding_model": settings.EMBEDDING_MODEL,
-            },
-        }
-    )
-    if rag_error:
-        pipeline[-1]["details"].update(rag_error)
-    step_counter += 1
-    # 2) LLM — юридическая оценка с контекстом RAG
-    sys = law_system_prompt(req)
-    usr = law_user_prompt(req, ctx)
-    law_tokens = req.max_tokens or 1024
-    try:
-        law_parsed, law_raw, law_meta = await ollama_chat_json(
-            sys, usr, req.model, max_tokens=law_tokens
-        )
-        llm_calls.append(
-            {
-                "kind": "law",
-                "system_prompt": sys,
-                "user_prompt": usr,
-                "raw_response": law_raw,
-                "parsed_response": law_parsed,
-                "endpoint": law_meta.get("endpoint"),
-                "endpoint_url": law_meta.get("url")
-                or f"{settings.OLLAMA_URL}/api/{law_meta.get('endpoint', 'chat')}",
-                "max_tokens": law_tokens,
-                "model": req.model or settings.OLLAMA_MODEL,
-            }
-        )
+    ctx: List[SourceItem] = []
+    if use_rag:
+        rag_error: Dict[str, Any] | None = None
+        try:
+            ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
+        except Exception as exc:
+            ctx = []
+            rag_error = {"error": str(exc)}
+        ctx = dedup_sources_by_hash(ctx)
         pipeline.append(
             {
                 "step": step_counter,
-                "name": "law_llm_analysis",
-                "description": "Юридический анализ договора через Ollama",
-                "target_url": llm_calls[-1]["endpoint_url"],
+                "name": "rag_vector_search",
+                "description": "Поиск нормативных актов в Qdrant по вектору запроса",
+                "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
                 "method": "POST",
-                "status": "ok",
+                "status": "error" if rag_error else ("ok" if ctx else "no_matches"),
                 "details": {
-                    "model": llm_calls[-1]["model"],
-                    "max_tokens": law_tokens,
-                    "endpoint": llm_calls[-1]["endpoint"],
+                    "top_k": settings.RAG_TOP_K,
+                    "hits": len(ctx),
+                    "collection": settings.QDRANT_COLLECTION,
+                    "embedding_model": settings.EMBEDDING_MODEL,
                 },
             }
         )
-        step_counter += 1
+        if rag_error:
+            pipeline[-1]["details"].update(rag_error)
+    else:
+        pipeline.append(
+            {
+                "step": step_counter,
+                "name": "rag_vector_search",
+                "description": "Поиск нормативных актов в Qdrant по вектору запроса",
+                "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
+                "method": "POST",
+                "status": "skipped",
+                "details": {
+                    "top_k": 0,
+                    "hits": 0,
+                    "collection": settings.QDRANT_COLLECTION,
+                    "embedding_model": settings.EMBEDDING_MODEL,
+                    "reason": "rag_disabled",
+                },
+            }
+        )
+    step_counter += 1
+    # 2) LLM — юридическая оценка с контекстом RAG
+    try:
+        law_parsed, law_calls = await _generate_law_payload(req, ctx)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
+
+    if not law_calls:
+        raise HTTPException(status_code=502, detail="Ollama error: empty response")
+
+    llm_calls.extend(law_calls)
+    last_law_call = law_calls[-1]
+    pipeline.append(
+        {
+            "step": step_counter,
+            "name": "law_llm_analysis",
+            "description": "Юридический анализ договора через Ollama",
+            "target_url": last_law_call.get("endpoint_url"),
+            "method": "POST",
+            "status": "ok" if last_law_call.get("parsed_response") else "error",
+            "details": {
+                "model": last_law_call.get("model"),
+                "max_tokens": last_law_call.get("max_tokens"),
+                "endpoint": last_law_call.get("endpoint"),
+                "attempts": len(law_calls),
+            },
+        }
+    )
+    step_counter += 1
 
     law_report = build_report(law_parsed, DEFAULT_LAW_SUMMARY)
 
@@ -507,3 +563,13 @@ async def analyze(req: AnalyzeRequest):
         payload["report_path"] = save_report_html(html_str, report_name)
 
     return AnalyzeResponse(**payload)
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest):
+    return await _run_analysis(req, use_rag=True)
+
+
+@router.post("/analyze_llm", response_model=AnalyzeResponse)
+async def analyze_llm(req: AnalyzeRequest):
+    return await _run_analysis(req, use_rag=False)
