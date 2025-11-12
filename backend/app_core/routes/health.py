@@ -26,9 +26,10 @@ async def health():
         "status": "ok",
         "ollama": "up" if ollama_ok else "down",
         "ollama_url": settings.OLLAMA_URL,
+        "ollama_model": settings.OLLAMA_MODEL,
+        "embedding_model": settings.EMBEDDING_MODEL,
         "installed_models": installed,
         "qdrant": "up" if qdrant_ok else "down",
         "qdrant_collection": settings.QDRANT_COLLECTION,
         "ru_collection_present": has_ru,
-        "reranker": "on" if settings.RERANK_ENABLE else "off",
     }

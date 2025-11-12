@@ -1,28 +1,47 @@
-try:  # pragma: no cover - optional dependency
-    from sentence_transformers import SentenceTransformer  # type: ignore
-except Exception:  # noqa: S110
-    SentenceTransformer = None  # type: ignore
+from __future__ import annotations
+
+import math
+from functools import lru_cache
+from typing import Iterable, List
+
+import httpx
 
 from ..config import settings
-from ..utils import pick_device_auto
 
-try:  # pragma: no cover
-    import torch  # type: ignore
-except Exception:  # noqa: S110
-    torch = None
 
-_embedder = None
+class EmbeddingError(RuntimeError):
+    """Raised when embedding service returns an unexpected payload."""
 
-def get_embedder() -> SentenceTransformer:
-    global _embedder
-    if SentenceTransformer is None:
-        raise RuntimeError("sentence-transformers is not installed")
-    if _embedder is None:
-        dev = pick_device_auto(settings.EMBED_DEVICE)
-        try:
-            _embedder = SentenceTransformer(settings.EMBEDDING_MODEL, device=dev)
-            print(f"[RAG] Embedding model on: {dev}")
-        except Exception as e:
-            print(f"[RAG] GPU init failed ({e}); fallback to CPU")
-            _embedder = SentenceTransformer(settings.EMBEDDING_MODEL, device="cpu")
-    return _embedder
+
+def _normalize(vector: Iterable[float]) -> List[float]:
+    values = [float(v) for v in vector]
+    norm = math.sqrt(sum(v * v for v in values))
+    if norm == 0.0:
+        return values
+    return [v / norm for v in values]
+
+
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    if not texts:
+        return []
+    url = f"{settings.OLLAMA_URL.rstrip('/')}/api/embeddings"
+    payload_model = settings.EMBEDDING_MODEL
+    vectors: List[List[float]] = []
+    with httpx.Client(timeout=60.0) as client:
+        for text in texts:
+            response = client.post(url, json={"model": payload_model, "prompt": text})
+            response.raise_for_status()
+            data = response.json()
+            embedding = data.get("embedding")
+            if not isinstance(embedding, list):
+                raise EmbeddingError("Ollama returned invalid embedding payload")
+            vectors.append(_normalize(embedding))
+    return vectors
+
+
+@lru_cache(maxsize=1)
+def get_vector_size() -> int:
+    probe = embed_texts(["dimension probe"])
+    if not probe or not probe[0]:
+        raise EmbeddingError("Failed to determine embedding vector size")
+    return len(probe[0])

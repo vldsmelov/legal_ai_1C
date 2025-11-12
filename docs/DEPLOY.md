@@ -1,153 +1,134 @@
-# DEPLOY — развертывание и эксплуатация
+# Развёртывание Legal AI Orchestrator
 
-## 1) Требования
+Документ описывает установку backend как оркестратора над внешними сервисами Ollama и Qdrant. Предполагается, что оба сервиса уже
+запущены и доступны в сети.
 
-- ОС: Ubuntu 22.04+ / Debian 12+ / аналогичный Linux.
-- Docker Engine 27+, Docker Compose 2.39+.
-- NVIDIA GPU (RTX 5090) + драйверы + nvidia-container-toolkit.
-- CUDA userspace для PyTorch nightly cu130 (образ основан на `nvidia/cuda:13.0.0-runtime-ubuntu24.04`).
-- Доступ к сети только для начальной загрузки весов (или прогретый кэш).
+## 1. Подготовка внешних сервисов
 
-**Проверка GPU в Docker**:
+1. **Ollama**: установите и запустите Ollama на машине с GPU/CPU.
+   ```bash
+   ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
+   ollama pull bge-m3
+   ollama serve --host 0.0.0.0 --port 11434
+   ```
+2. **Qdrant**: поднимите отдельный экземпляр (docker, binary, managed). Например, в Docker:
+   ```bash
+   docker run -d --name qdrant \
+     -p 6333:6333 \
+     -v qdrant_storage:/qdrant/storage \
+     qdrant/qdrant:latest
+   ```
+3. Убедитесь, что сервисы отвечают:
+   ```bash
+   curl http://localhost:11434/api/tags
+   curl http://localhost:6333/collections
+   ```
+
+## 2. Установка backend
+
 ```bash
-nvidia-smi
-docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi
+sudo mkdir -p /opt/legal-ai
+cd /opt/legal-ai
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r /path/to/legal_ai_1C/backend/requirements.txt
 ```
 
-**Установка nvidia-container-toolkit (если не установлен)**:
-```
-# см. оф. инструкцию NVIDIA для вашей ОС/дистрибутива
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure
-sudo systemctl restart docker
-```
+Скопируйте репозиторий в `/opt/legal-ai` или настройте переменную `LEGAL_AI_PROJECT_ROOT`, чтобы backend мог найти директории
+`corpus/` и `reports/`.
 
-## 2) Сборка и запуск
+Создайте файл окружения `/opt/legal-ai/backend/.env`:
 
-**Ollama (отдельный сервис)**
-
-Разверните Ollama на хосте и убедитесь, что API доступен по `http://localhost:11434`. Сервис должен быть запущен до старта backend (контейнер подключается к нему через `host.docker.internal`).
-Подгрузите модель:
 ```
-ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=krith/qwen2.5-32b-instruct:IQ4_XS
+EMBEDDING_MODEL=BAAI/bge-m3
+QDRANT_URL=http://127.0.0.1:6333
+QDRANT_COLLECTION=ru_law_m3
+LEGAL_AI_PROJECT_ROOT=/opt/legal-ai
+LEGAL_AI_LOCAL_BASE=/opt/legal-ai
+REPORT_OUTPUT_DIR=/opt/legal-ai/reports
 ```
 
-### Чистая сборка backend
+При необходимости добавьте другие переменные из таблицы в README.
+
+## 3. Запуск приложения
+
+Вручную:
+
 ```bash
-docker compose down --remove-orphans
-docker compose build --no-cache backend
-docker compose up -d
-```
-
-> **Важно:** стек ожидает образ `qdrant/qdrant:v1.9.0`. Если образ не был ранее загружен, выполните `docker pull qdrant/qdrant:v1.9.0` перед `docker compose up` или позвольте Compose сделать это автоматически.
-
-### Обновление зависимостей
-
-Добавьте или обновите зависимости в `backend/requirements.txt`, затем выполните:
-```bash
-docker compose build backend
-docker compose up -d backend
-```
-
-**Поднять стек**
-```
-export DOCKER_BUILDKIT=1
-docker compose up -d --build
-```
-
-**Проверки**
-```
-curl -s http://localhost:8087/health | jq
-docker logs -f backend
-```
-
-## 3) Кэширование весов (HF cache)
-
-**Рекомендуется смонтировать и предварительно наполнить локальный кэш**:
-```
-# docker-compose.yml
-services:
-  backend:
-    volumes:
-      - ./.hf_cache:/root/.cache/huggingface
-```
-**Прогреть кэш реранкера до запуска:**
-```
-mkdir -p .hf_cache
-docker run --rm -v "$PWD/.hf_cache:/root/.cache/huggingface" \
-  legal-ai/backend:dev \
-  python - <<'PY'
-from FlagEmbedding import FlagReranker
-FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=False, device="cpu")
-print("reranker cached")
-PY
-```
-Аналогично можно прогреть и эмбеддер (BGE-M3) — он подтянется при первом ingest/search.
-
-## 3.1 Сеть и фоллбэк HTTPS→HTTP
-В некоторых средах HTTPS из контейнера может быть недоступен. Для диагностики:
-```bash 
-curl -s "http://localhost:8087/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8087/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
-```
-Онлайн-ингест поддерживает автоматический даунгрейд: 
-```bash
-curl -s -X POST http://localhost:8087/rag/fetch_ingest_publication
-```
-## 4) Режимы старта
-
-**Для быстрого и стабильного запуска используйте «лёгкие» проверки:**
-```
-STARTUP_CHECKS=1
-SELF_CHECK_TIMEOUT=5
-SELF_CHECK_GEN=0
-EMBED_PRELOAD=0
-RERANK_PRELOAD=0
-STARTUP_CUDA_NAME=0
-```
-
-**Команда:**
-```
+cd /opt/legal-ai/backend
+source ../.venv/bin/activate
 uvicorn app:app --host 0.0.0.0 --port 8087 --log-level info
 ```
-Не используйте `--reload` в проде: он порождает двойной процесс и усложняет диагностику.
 
-## 5) Производительность
+### systemd unit
 
-- Реранкер: RERANK_KEEP=5, RERANK_BATCH=16 достаточно для RTX 5090.
-- Генерация: max_tokens 256–700 для быстрых ответов.
-- Ингест большого корпуса: грузите батчами по 1–5 тыс. записей.
-- Для онлайн-ингеста используйте /rag/fetch_ingest_publication_batch и concurrency.
+`/etc/systemd/system/legal-ai.service`:
 
-## 6) Безопасность
-- Запускать backend в частной сети Docker; наружу публиковать только 8087 (или за обратным прокси).
-- По желанию: включить простую аутентификацию/токен в прокси (Nginx/Traefik).
-- CORS — ограничить домены фронта.
-- Логи — не сохранять текст договоров дольше необходимого.
+```
+[Unit]
+Description=Legal AI Orchestrator
+After=network.target
 
-## 7) Обновления без простоя
+[Service]
+Type=simple
+WorkingDirectory=/opt/legal-ai/backend
+EnvironmentFile=/opt/legal-ai/backend/.env
+ExecStart=/opt/legal-ai/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8087 --log-level info
+Restart=on-failure
 
-- Построить новый образ → docker compose up -d (Compose сам перезапустит контейнер).
+[Install]
+WantedBy=multi-user.target
+```
 
-- Qdrant хранит данные в volume — не теряются.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now legal-ai.service
+```
 
-- При изменении схемы коллекции — создать новую коллекцию и переключить имя в ENV.
+Проверка состояния: `systemctl status legal-ai.service`.
 
-## 8) Мониторинг/Диагностика
+## 4. Контейнерный вариант
 
-- /health — быстрый статус.
+Если backend запускается внутри контейнера, а Ollama/Qdrant — на хосте, пробросьте `host.docker.internal`:
 
-- docker logs -f backend — трассировка старта и запросов.
+```bash
+docker build -t legal-ai-backend -f backend/Dockerfile .
+docker run --rm \
+  --name legal-ai-backend \
+  --add-host=host.docker.internal:host-gateway \
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+  -e QDRANT_URL=http://host.docker.internal:6333 \
+  -e LEGAL_AI_PROJECT_ROOT=/app \
+  -p 8087:8087 \
+  legal-ai-backend
+```
 
-- Если «висит» первый /analyze — проверьте прогрев HF-кэша реранкера.
+Примонтируйте директории с корпусом и отчётами при необходимости:
 
-- Если /net/check возвращает ConnectTimeout для HTTPS, проверьте сетевые политики Docker/файрволл и используйте allow_http_downgrade: true на время загрузки источников.
+```bash
+docker run --rm \
+  -v $(pwd)/corpus:/app/corpus \
+  -v $(pwd)/reports:/app/reports \
+  ...
+```
 
-## 9) Оффлайн-развёртывание
+## 5. Эксплуатация
 
-- Прогрейте HF-кэш и образ заранее на машине с интернетом:
-  
-  - .hf_cache (BGE-M3, bge-reranker-v2-m3)
-  - ollama pull krith/qwen2.5-32b-instruct:IQ4_XS + экспорт образа ollama (или локальный реестр)
+- Проверить готовность: `curl http://127.0.0.1:8087/health`.
+- Основной анализ: `curl -X POST http://127.0.0.1:8087/analyze -H 'Content-Type: application/json' -d '{"contract_text":"..."}'`.
+- HTML-отчёт: `curl -X POST http://127.0.0.1:8087/doc/analyze_file -d '{"path":"samples/demo.txt","report_format":"html","report_inline":true}'`.
+- Индексацию корпуса выполняйте через внешние утилиты, напрямую обращаясь к Ollama за эмбеддингами и к Qdrant за операциями с коллекцией.
 
-- Перенесите на целевую машину, смонтируйте .hf_cache, импортируйте модели Ollama.
+## 6. Обновление
 
+```bash
+cd /opt/legal-ai
+git pull
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+sudo systemctl restart legal-ai.service
+```
+
+Регулярно создавайте snapshot'ы Qdrant (`/collections/{collection}/snapshots`) и резервные копии каталога `reports/`.

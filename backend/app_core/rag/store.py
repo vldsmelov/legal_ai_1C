@@ -1,5 +1,5 @@
-import json, os, numpy as np
-from typing import List
+import json
+from typing import List, Optional
 
 try:  # pragma: no cover - optional dependency
     from qdrant_client import QdrantClient  # type: ignore
@@ -8,10 +8,11 @@ except Exception:  # noqa: S110
     QdrantClient = None  # type: ignore
     VectorParams = Distance = PointStruct = Filter = FieldCondition = MatchValue = None  # type: ignore
 
-from .embedder import get_embedder
+from .embedder import embed_texts, get_vector_size
 from ..types import IngestItem, SourceItem
 from ..config import settings
 from ..utils import deterministic_point_id, text_hash
+from ..paths import CORPUS_DIR
 
 _qdrant = None
 
@@ -27,28 +28,61 @@ def get_qdrant() -> QdrantClient:
         _qdrant = QdrantClient(url=settings.QDRANT_URL, timeout=2.0)
     return _qdrant
 
-def ensure_collection():
+def _collection_vector_size(info) -> Optional[int]:  # pragma: no cover - qdrant schema helper
+    try:
+        params = getattr(info.config, "params", None)
+        vectors = getattr(params, "vectors", None)
+        if hasattr(vectors, "size"):
+            return int(vectors.size)
+        if isinstance(vectors, dict) and vectors:
+            first = next(iter(vectors.values()))
+            if hasattr(first, "size"):
+                return int(first.size)
+    except Exception:
+        return None
+    return None
+
+
+def ensure_collection(expected_size: Optional[int] = None):
     client = get_qdrant()
     names = [c.name for c in client.get_collections().collections]
     if settings.QDRANT_COLLECTION not in names:
+        dim = expected_size or get_vector_size()
+        params = VectorParams(size=dim, distance=Distance.COSINE)
         try:
             client.create_collection(
                 collection_name=settings.QDRANT_COLLECTION,
-                vectors=VectorParams(size=1024, distance=Distance.COSINE),
+                vectors=params,
             )
         except AssertionError:
             client.create_collection(
                 collection_name=settings.QDRANT_COLLECTION,
-                vectors_config=VectorParams(size=1024, distance=Distance.COSINE),
+                vectors_config=params,
             )
+        return
+
+    if expected_size is None:
+        return
+
+    try:
+        info = client.get_collection(settings.QDRANT_COLLECTION)
+    except Exception:
+        return
+    current_size = _collection_vector_size(info)
+    if current_size and current_size != expected_size:
+        raise RuntimeError(
+            f"Qdrant collection '{settings.QDRANT_COLLECTION}' expects vectors of size {current_size},"
+            f" but got {expected_size}"
+        )
 
 def ingest_items(items: List[IngestItem]):
     _require_qdrant()
-    emb = get_embedder()
     client = get_qdrant()
     texts = [it.text for it in items]
-    vecs = emb.encode(texts, normalize_embeddings=True)
-    vectors = [np.asarray(v, dtype=np.float32).tolist() for v in vecs]
+    vectors = embed_texts(texts)
+    if not vectors:
+        return {"ingested": 0, "collection": settings.QDRANT_COLLECTION}
+    ensure_collection(len(vectors[0]))
     points = []
     for i, it in enumerate(items):
         payload = it.dict()
@@ -61,12 +95,17 @@ def ingest_items(items: List[IngestItem]):
 
 def rag_search_ru(query: str, top_k: int = 8) -> List[SourceItem]:
     try:
-        ensure_collection()
+        query_vec = embed_texts([query])
     except RuntimeError:
         return []
-    emb = get_embedder()
+    if not query_vec:
+        return []
+    try:
+        ensure_collection(len(query_vec[0]))
+    except RuntimeError:
+        return []
     client = get_qdrant()
-    qv = emb.encode([query], normalize_embeddings=True)[0].astype(np.float32).tolist()
+    qv = query_vec[0]
     flt = Filter(must=[FieldCondition(key="jurisdiction", match=MatchValue(value="RU"))])
     res = client.search(collection_name=settings.QDRANT_COLLECTION, query_vector=qv, limit=top_k, query_filter=flt)
     out: List[SourceItem] = []
@@ -82,11 +121,11 @@ def rag_search_ru(query: str, top_k: int = 8) -> List[SourceItem]:
 
 def ingest_sample_from_file():
     ensure_collection()
-    path = "/workspace/corpus/ru_sample.jsonl"
-    if not os.path.exists(path):
+    path = CORPUS_DIR / "ru_sample.jsonl"
+    if not path.exists():
         raise FileNotFoundError("Файл corpus/ru_sample.jsonl не найден")
     items: List[IngestItem] = []
-    with open(path, "r", encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line: continue
