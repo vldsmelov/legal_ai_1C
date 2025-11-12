@@ -1,55 +1,8 @@
 name: legal_ai_1c
 
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0:11434
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama:/root/.ollama
-    healthcheck:
-      # healthcheck тоже через API, не через CLI
-      test: ["CMD-SHELL", "OLLAMA_HOST=127.0.0.1:11434 ollama list >/dev/null 2>&1 || exit 1"]      
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    restart: unless-stopped
-
-  ollama-pull:
-    image: curlimages/curl:8.10.1
-    container_name: ollama-pull
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      - OLLAMA_API=http://ollama:11434
-      - OLLAMA_MODEL=${OLLAMA_MODEL}
-    # Ждём API и вызываем /api/pull — модель скачает САМ демон ollama (в его volume)
-    entrypoint:
-      - /bin/sh
-      - -lc
-      - |
-        echo "[pull] waiting for $${OLLAMA_API} ..."
-        for i in $$(seq 1 120); do
-          if curl -fsS $${OLLAMA_API}/api/tags >/dev/null; then
-            echo "[pull] server is up"; break
-          fi
-          sleep 2
-        done
-        echo "[pull] start pull: $${OLLAMA_MODEL}"
-        curl -fsS -X POST $${OLLAMA_API}/api/pull \
-          -H 'Content-Type: application/json' \
-          -d '{"name":"'"$${OLLAMA_MODEL}"'"}' \
-          | sed -u 's/^/[pull] /'
-        echo "[pull] done"
-    restart: "no"
-
-
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.9.0
     container_name: qdrant
     ports:
       - "6333:6333"
@@ -63,11 +16,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args:
-        BASE_IMAGE: legal-ai/backend-base:cu130
     container_name: backend
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL}
       - QDRANT_URL=${QDRANT_URL}
       - QDRANT_COLLECTION=${QDRANT_COLLECTION}
@@ -93,22 +44,20 @@ services:
       - NET_TEST_URLS=https://publication.pravo.gov.ru/,https://pravo.gov.ru/,https://docs.cntd.ru/
 
     depends_on:
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
       qdrant:
         condition: service_started
     volumes:
       - ./:/workspace
       # - ./.hf_cache:/root/.cache/huggingface
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     working_dir: /workspace/backend
     # просто запускаем uvicorn — без shell-скриптов
-    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload --log-level info
+    command: uvicorn app:app --host 0.0.0.0 --port 8087 --reload --log-level info
     ports:
-      - "8000:8000"
+      - "8087:8087"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8087/health >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 20
@@ -120,7 +69,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  ollama:
-    name: legal_ai_1c_ollama
   qdrant_data:
     name: legal_ai_1c_qdrant_data

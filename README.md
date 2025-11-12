@@ -2,7 +2,7 @@
 
 **Назначение:** проверка договоров по российскому праву локально, без выхода в сеть.
 
-**Стек:** FastAPI · Ollama (LLM: `qwen2.5:7b-instruct`) · Qdrant (вектора) · BGE-M3 (эмбеддер) · **bge-reranker-v2-m3** (GPU-реранкер).
+**Стек:** FastAPI · Ollama (LLM: `krith/qwen2.5-32b-instruct:IQ4_XS`) · Qdrant (вектора) · BGE-M3 (эмбеддер) · **bge-reranker-v2-m3** (GPU-реранкер).
 
 ---
 
@@ -50,20 +50,21 @@ corpus/
 
 ```bash
 # 1) Модель для Ollama
-ollama pull qwen2.5:7b-instruct
+# (сервис Ollama должен быть запущен и слушать http://localhost:11434)
+ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 
 # 2) Поднять стек
 docker compose up -d --build
 
 # 3) Проверить здоровье
-curl -s http://localhost:8000/health | jq
+curl -s http://localhost:8087/health | jq
 
 # 4) Загрузить демо-НПА
 mkdir -p corpus
-curl -s -X POST http://localhost:8000/rag/ingest_sample | jq
+curl -s -X POST http://localhost:8087/rag/ingest_sample | jq
 
 # 5) Пробный анализ
-curl -s -X POST http://localhost:8000/analyze \
+curl -s -X POST http://localhost:8087/analyze \
   -H "Content-Type: application/json" \
   -d '{
     "contract_text": "ДОГОВОР УСЛУГ ... (см. примеры ниже)",
@@ -73,25 +74,19 @@ curl -s -X POST http://localhost:8000/analyze \
     "max_tokens": 512
   }' | jq
 
-# 6) Полная пересборка c базовым образом
+# 6) Полная пересборка backend-образа
 docker compose down --remove-orphans
-# при необходимости удалите старые образы: docker rmi legal-ai/backend:dev legal-ai/backend-base:cu130
-docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
 docker compose build --no-cache backend
 docker compose up -d
 
-# 7) Обновить только лёгкие зависимости (requirements.txt)
+> Перед первым запуском убедитесь, что образ `qdrant/qdrant:v1.9.0` доступен локально (его можно заранее подтянуть командой `docker pull qdrant/qdrant:v1.9.0`).
+
+# 7) Пересобрать после обновления зависимостей
 docker compose build backend
 docker compose up -d backend
 ```
 
-### Разделение зависимостей
-
-- `backend/Dockerfile.base` + `backend/requirements.base.txt` — тяжёлые пакеты (PyTorch, HuggingFace), которые ставятся редко.
-- `backend/Dockerfile` + `backend/requirements.txt` — лёгкие зависимости FastAPI, которые можно обновлять без пересборки base-образа.
-
-Добавили новую лёгкую библиотеку? Обновите `backend/requirements.txt`, затем `docker compose build backend && docker compose up -d backend`.
-Поменяли версию тяжёлого пакета? Обновите `backend/requirements.base.txt`, после чего пересоберите базовый образ и backend.
+> Примечание: backend ожидает, что Ollama доступна по `http://localhost:11434`. В docker-compose.yml добавлен `extra_hosts: host.docker.internal:host-gateway`, поэтому сервис внутри контейнера обращается к Ollama на машине-хосте по адресу `http://host.docker.internal:11434`.
 
 ---
 
@@ -99,8 +94,8 @@ docker compose up -d backend
 ## Конфигурация (ENV)
 | Ключ                 | Значение (по умолч.)      | Описание                 |
 | -------------------- | ------------------------- | ------------------------ |
-| `OLLAMA_BASE_URL`    | `http://ollama:11434`     | адрес Ollama             |
-| `OLLAMA_MODEL`       | `qwen2.5:7b-instruct`     | LLM                      |
+| `OLLAMA_BASE_URL`    | `http://127.0.0.1:11434`     | адрес Ollama             |
+| `OLLAMA_MODEL`       | `krith/qwen2.5-32b-instruct:IQ4_XS` | LLM                      |
 | `QDRANT_URL`         | `http://qdrant:6333`      | адрес Qdrant             |
 | `QDRANT_COLLECTION`  | `ru_law_m3`               | коллекция                |
 | `EMBEDDING_MODEL`    | `BAAI/bge-m3`             | эмбеддер                 |
@@ -176,7 +171,7 @@ Site-aware парсер страниц публикаций: пытается р
 
 - **Онлайн-ингест (пример):**
 ```bash
-curl -s -X POST http://localhost:8000/rag/fetch_ingest_publication \
+curl -s -X POST http://localhost:8087/rag/fetch_ingest_publication \
   -H "Content-Type: application/json" \
   -d '{"url":"http://publication.pravo.gov.ru/Document/View/<ID>?format=HTML","allow_http_downgrade":true}'
 ```

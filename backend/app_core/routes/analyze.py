@@ -9,14 +9,15 @@ from ..prompts import get_prompt_template, render_prompt
 from ..rag.store import rag_search_ru
 from ..rerank import apply_rerank
 from ..scoring import (
-    SECTION_DEFS,
-    SECTION_INDEX,
-    SECTION_KEYS,
-    compute_total_and_color,
     build_focus,
+    compute_total_and_color,
+    get_section_defs,
+    get_section_index,
+    get_section_keys,
     sections_lines,
 )
 from ..utils import dedup_sources_by_hash
+from ..report.summary import build_document_overview, summarize_report_block
 
 router = APIRouter()
 
@@ -78,12 +79,25 @@ def business_user_prompt(req: AnalyzeRequest) -> str:
     return render_prompt("business_user", contract_text=req.contract_text)
 
 
+def overview_system_prompt(req: AnalyzeRequest) -> str:
+    return render_prompt(
+        "overview_system",
+        jurisdiction=req.jurisdiction,
+        contract_type=req.contract_type or "не указан",
+        language=req.language,
+    ).strip()
+
+
+def overview_user_prompt(req: AnalyzeRequest) -> str:
+    return render_prompt("overview_user", contract_text=req.contract_text)
+
+
 def _has_all_sections(payload: Dict[str, Any]) -> bool:
     sections = payload.get("sections")
     if not isinstance(sections, list):
         return False
     keys = {item.get("key") for item in sections if isinstance(item, dict) and item.get("key")}
-    return SECTION_KEYS.issubset(keys)
+    return get_section_keys().issubset(keys)
 
 
 async def _call_business_model(req: AnalyzeRequest, max_tokens: int) -> Dict[str, Any]:
@@ -114,7 +128,9 @@ async def _generate_business_payload(req: AnalyzeRequest) -> Dict[str, Any]:
 def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]:
     sections_in: List[SectionScore] = []
     missing_keys: List[str] = []
-    for sdef in SECTION_DEFS:
+    section_defs = get_section_defs()
+    section_index = get_section_index()
+    for sdef in section_defs:
         raw_item = next((c for c in (parsed.get("sections") or []) if c.get("key") == sdef["key"]), None)
         if raw_item is None:
             sections_in.append(SectionScore(key=sdef["key"], raw=0, comment="не найдено"))
@@ -147,7 +163,7 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
     issues: List[Dict[str, Any]] = []
     for it in issues_raw:
         section_key = it.get("section", "")
-        if section_key not in SECTION_INDEX:
+        if section_key not in section_index:
             section_key = "scope"
         sev = it.get("severity", "medium")
         if sev not in ("high", "medium", "low"):
@@ -164,9 +180,10 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
                 }
             )
 
-    focus_summary, top_focus = build_focus(section_table, issues)
+    focus_summary, top_focus_models = build_focus(section_table, issues)
+    top_focus = [item.dict() for item in top_focus_models]
     summary = (parsed.get("summary") or "").strip() or default_summary
-    if len(missing_keys) == len(SECTION_DEFS):
+    if section_defs and len(missing_keys) == len(section_defs):
         summary = (
             "Модель не смогла сформировать оценки по бизнес-рискам; повторите анализ или обновите промпт."
         )
@@ -229,6 +246,20 @@ async def analyze(req: AnalyzeRequest):
 
     business_report = build_report(business_parsed, DEFAULT_BUSINESS_SUMMARY)
 
+    try:
+        overview_raw = await ollama_chat_json(
+            overview_system_prompt(req),
+            overview_user_prompt(req),
+            req.model,
+            max_tokens=min(req.max_tokens or 600, 600),
+        )
+    except Exception:
+        overview_raw = {}
+    overview = build_document_overview(overview_raw)
+
+    law_narrative = summarize_report_block(law_report, "Соответствие законодательству")
+    business_narrative = summarize_report_block(business_report, "Бизнес-риски и логика сделки")
+
     return AnalyzeResponse(
         score_total=law_report["score_total"],
         score_text=law_report["score_text"],
@@ -250,4 +281,7 @@ async def analyze(req: AnalyzeRequest):
         business_top_focus=business_report["top_focus"],
         business_issues=business_report["issues"],
         business_section_scores=business_report["section_scores"],
+        overview=overview,
+        law_narrative=law_narrative,
+        business_narrative=business_narrative,
     )

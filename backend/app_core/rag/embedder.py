@@ -1,12 +1,22 @@
-from sentence_transformers import SentenceTransformer
+try:  # pragma: no cover - optional dependency
+    from sentence_transformers import SentenceTransformer  # type: ignore
+except Exception:  # noqa: S110
+    SentenceTransformer = None  # type: ignore
+
 from ..config import settings
 from ..utils import pick_device_auto
-import torch
+
+try:  # pragma: no cover
+    import torch  # type: ignore
+except Exception:  # noqa: S110
+    torch = None
 
 _embedder = None
 
 def get_embedder() -> SentenceTransformer:
     global _embedder
+    if SentenceTransformer is None:
+        raise RuntimeError("sentence-transformers is not installed")
     if _embedder is None:
         dev = pick_device_auto(settings.EMBED_DEVICE)
         try:

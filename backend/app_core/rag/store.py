@@ -1,7 +1,13 @@
 import json, os, numpy as np
 from typing import List
-from qdrant_client import QdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue
+
+try:  # pragma: no cover - optional dependency
+    from qdrant_client import QdrantClient  # type: ignore
+    from qdrant_client.models import VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue
+except Exception:  # noqa: S110
+    QdrantClient = None  # type: ignore
+    VectorParams = Distance = PointStruct = Filter = FieldCondition = MatchValue = None  # type: ignore
+
 from .embedder import get_embedder
 from ..types import IngestItem, SourceItem
 from ..config import settings
@@ -9,7 +15,13 @@ from ..utils import deterministic_point_id, text_hash
 
 _qdrant = None
 
+def _require_qdrant() -> None:
+    if QdrantClient is None:
+        raise RuntimeError("qdrant-client is not installed")
+
+
 def get_qdrant() -> QdrantClient:
+    _require_qdrant()
     global _qdrant
     if _qdrant is None:
         _qdrant = QdrantClient(url=settings.QDRANT_URL, timeout=2.0)
@@ -31,6 +43,7 @@ def ensure_collection():
             )
 
 def ingest_items(items: List[IngestItem]):
+    _require_qdrant()
     emb = get_embedder()
     client = get_qdrant()
     texts = [it.text for it in items]
@@ -47,7 +60,10 @@ def ingest_items(items: List[IngestItem]):
     return {"ingested": len(points), "collection": settings.QDRANT_COLLECTION}
 
 def rag_search_ru(query: str, top_k: int = 8) -> List[SourceItem]:
-    ensure_collection()
+    try:
+        ensure_collection()
+    except RuntimeError:
+        return []
     emb = get_embedder()
     client = get_qdrant()
     qv = emb.encode([query], normalize_embeddings=True)[0].astype(np.float32).tolist()

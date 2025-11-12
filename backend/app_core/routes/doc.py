@@ -155,7 +155,7 @@ async def _call_analyze(compact_text: str,
     # Большой таймаут на чтение/запись для больших документов
     timeout = httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=300.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post("http://127.0.0.1:8000/analyze", json=payload)
+        r = await client.post("http://127.0.0.1:8087/analyze", json=payload)
         r.raise_for_status()
         return r.json()
 

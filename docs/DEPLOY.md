@@ -5,13 +5,13 @@
 - ОС: Ubuntu 22.04+ / Debian 12+ / аналогичный Linux.
 - Docker Engine 27+, Docker Compose 2.39+.
 - NVIDIA GPU (RTX 5090) + драйверы + nvidia-container-toolkit.
-- CUDA userspace для PyTorch nightly cu130 (в образ уже встроено).
+- CUDA userspace для PyTorch nightly cu130 (образ основан на `nvidia/cuda:13.0.0-runtime-ubuntu24.04`).
 - Доступ к сети только для начальной загрузки весов (или прогретый кэш).
 
 **Проверка GPU в Docker**:
 ```bash
 nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi
 ```
 
 **Установка nvidia-container-toolkit (если не установлен)**:
@@ -24,24 +24,30 @@ sudo systemctl restart docker
 
 ## 2) Сборка и запуск
 
-**Модели Ollama**
+**Ollama (отдельный сервис)**
+
+Разверните Ollama на хосте и убедитесь, что API доступен по `http://localhost:11434`. Сервис должен быть запущен до старта backend (контейнер подключается к нему через `host.docker.internal`).
+Подгрузите модель:
 ```
-ollama pull qwen2.5:7b-instruct
+ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
 ```
 
-### Чистая сборка с базовым образом
-Если используете разделённую сборку (`backend/Dockerfile.base` + `backend/Dockerfile`):
+### Чистая сборка backend
 ```bash
-# базовый образ собираем из каталога backend
-docker build --no-cache -f backend/Dockerfile.base -t legal-ai/backend-base:cu130 backend
-# затем соберём только backend (использует BASE_IMAGE из compose)
+docker compose down --remove-orphans
 docker compose build --no-cache backend
+docker compose up -d
 ```
+
+> **Важно:** стек ожидает образ `qdrant/qdrant:v1.9.0`. Если образ не был ранее загружен, выполните `docker pull qdrant/qdrant:v1.9.0` перед `docker compose up` или позвольте Compose сделать это автоматически.
 
 ### Обновление зависимостей
 
-- Лёгкие пакеты: добавьте/обновите в `backend/requirements.txt`, затем выполните `docker compose build backend` и `docker compose up -d backend`.
-- Тяжёлые пакеты (PyTorch, HuggingFace и т.п.): меняем `backend/requirements.base.txt` и пересобираем базовый образ `backend/Dockerfile.base`, после чего пересобираем `backend`.
+Добавьте или обновите зависимости в `backend/requirements.txt`, затем выполните:
+```bash
+docker compose build backend
+docker compose up -d backend
+```
 
 **Поднять стек**
 ```
@@ -51,7 +57,7 @@ docker compose up -d --build
 
 **Проверки**
 ```
-curl -s http://localhost:8000/health | jq
+curl -s http://localhost:8087/health | jq
 docker logs -f backend
 ```
 
@@ -81,11 +87,11 @@ PY
 ## 3.1 Сеть и фоллбэк HTTPS→HTTP
 В некоторых средах HTTPS из контейнера может быть недоступен. Для диагностики:
 ```bash 
-curl -s "http://localhost:8000/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8000/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
+curl -s "http://localhost:8087/net/check?url=https://publication.pravo.gov.ru/" | jq +curl -s "http://localhost:8087/net/check?url=http://publication.pravo.gov.ru/" | jq +``] 
 ```
 Онлайн-ингест поддерживает автоматический даунгрейд: 
 ```bash
-curl -s -X POST http://localhost:8000/rag/fetch_ingest_publication
+curl -s -X POST http://localhost:8087/rag/fetch_ingest_publication
 ```
 ## 4) Режимы старта
 
@@ -101,7 +107,7 @@ STARTUP_CUDA_NAME=0
 
 **Команда:**
 ```
-uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
+uvicorn app:app --host 0.0.0.0 --port 8087 --log-level info
 ```
 Не используйте `--reload` в проде: он порождает двойной процесс и усложняет диагностику.
 
@@ -113,7 +119,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
 - Для онлайн-ингеста используйте /rag/fetch_ingest_publication_batch и concurrency.
 
 ## 6) Безопасность
-- Запускать backend в частной сети Docker; наружу публиковать только 8000 (или за обратным прокси).
+- Запускать backend в частной сети Docker; наружу публиковать только 8087 (или за обратным прокси).
 - По желанию: включить простую аутентификацию/токен в прокси (Nginx/Traefik).
 - CORS — ограничить домены фронта.
 - Логи — не сохранять текст договоров дольше необходимого.
@@ -141,6 +147,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --log-level info
 - Прогрейте HF-кэш и образ заранее на машине с интернетом:
   
   - .hf_cache (BGE-M3, bge-reranker-v2-m3)
-  - ollama pull qwen2.5:7b-instruct + экспорт образа ollama (или локальный реестр)
+  - ollama pull krith/qwen2.5-32b-instruct:IQ4_XS + экспорт образа ollama (или локальный реестр)
 
 - Перенесите на целевую машину, смонтируйте .hf_cache, импортируйте модели Ollama.
+

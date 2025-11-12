@@ -43,8 +43,8 @@ class Settings:
         prompts_cfg = cfg.get("prompts", {}) if isinstance(cfg.get("prompts"), dict) else {}
 
         # Ollama
-        self.OLLAMA_URL = os.getenv("OLLAMA_BASE_URL") or ollama_cfg.get("url", "http://ollama:11434")
-        self.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or ollama_cfg.get("model", "qwen2.5:7b-instruct")
+        self.OLLAMA_URL = os.getenv("OLLAMA_BASE_URL") or ollama_cfg.get("url", "http://127.0.0.1:11434")
+        self.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL") or ollama_cfg.get("model", "krith/qwen2.5-32b-instruct:IQ4_XS")
 
         # RAG
         self.QDRANT_URL = os.getenv("QDRANT_URL") or rag_cfg.get("qdrant_url", "http://qdrant:6333")
@@ -113,6 +113,8 @@ class Settings:
             ),
             "business_system": prompts_cfg.get("business_system", "business_system.txt"),
             "business_user": prompts_cfg.get("business_user", "business_user.txt"),
+            "overview_system": prompts_cfg.get("overview_system", "overview_system.txt"),
+            "overview_user": prompts_cfg.get("overview_user", "overview_user.txt"),
         }
 
 
