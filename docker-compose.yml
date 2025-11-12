@@ -5,37 +5,13 @@ services:
       dockerfile: backend/Dockerfile
     container_name: legal-ai-backend
     environment:
-      OLLAMA_BASE_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      QDRANT_URL: http://host.docker.internal:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8087:8087"
     volumes:
       - ./corpus:/app/corpus:ro
       - ./reports:/app/reports
-    depends_on:
-      - ollama
-      - qdrant
     restart: unless-stopped
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: legal-ai-qdrant
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
-    restart: unless-stopped
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: legal-ai-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    restart: unless-stopped
-
-volumes:
-  qdrant_data:
-  ollama_data:
