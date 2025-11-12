@@ -1,6 +1,6 @@
 # backend/app_core/routes/doc.py
 from __future__ import annotations
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, UploadFile, File, Form, HTTPException
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import httpx, re
@@ -32,6 +32,15 @@ SECTION_PATTERNS: List[Tuple[str, re.Pattern]] = [
 
 ORDER = [k for k, _ in SECTION_PATTERNS]
 
+def _decode_bytes(data: bytes) -> str:
+    for enc in ("utf-8", "cp1251"):
+        try:
+            return data.decode(enc)
+        except Exception:
+            continue
+    return data.decode(errors="ignore")
+
+
 def _read_text_file(path: Path) -> str:
     for enc in ("utf-8", "cp1251"):
         try:
@@ -40,6 +49,61 @@ def _read_text_file(path: Path) -> str:
             continue
     # как крайний случай — без указания кодировки
     return path.read_text(errors="ignore")
+
+
+async def _analyze_raw_text(
+    raw: str,
+    source_label: str,
+    jurisdiction: str,
+    contract_type: str,
+    language: str,
+    max_tokens: int,
+    per_section_limit: int,
+    total_limit: int,
+    report_format: str | None,
+    report_save: bool,
+    report_inline: bool,
+    report_name: str | None,
+):
+    sections = extract_sections(raw)
+    compact = build_compact(
+        sections,
+        per_section_limit=per_section_limit,
+        total_limit=total_limit,
+    )
+    analysis = await _call_analyze(
+        compact,
+        jurisdiction,
+        contract_type,
+        language,
+        max_tokens,
+    )
+
+    resp = {
+        "source_path": source_label,
+        "original_bytes": len(raw.encode("utf-8", errors="ignore")),
+        "compact_bytes": len(compact.encode("utf-8", errors="ignore")),
+        "compact_preview": compact[:800],
+        "analysis": analysis,
+    }
+
+    if (report_format or "").lower() == "html":
+        html_str = render_html(
+            meta={
+                "source_path": source_label,
+                "compact_preview": compact,
+                "original_bytes": resp["original_bytes"],
+                "compact_bytes": resp["compact_bytes"],
+            },
+            analysis=analysis,
+        )
+        if report_save:
+            out = save_report_html(html_str, report_name or Path(source_label).stem or "report")
+            resp["report_path"] = out
+        if report_inline:
+            resp["report_html"] = html_str
+
+    return resp
 
 def _normalize(s: str) -> str:
     s = s.replace("\r\n", "\n").replace("\r", "\n")
@@ -185,28 +249,55 @@ async def analyze_file(
     if not p.exists():
         return {"error": f"file not found: {p}"}
     raw = _read_text_file(p)
-    sections = extract_sections(raw)
-    compact = build_compact(sections, per_section_limit=per_section_limit, total_limit=total_limit)
-    analysis = await _call_analyze(compact, jurisdiction, contract_type, language, max_tokens)
+    return await _analyze_raw_text(
+        raw,
+        str(p),
+        jurisdiction,
+        contract_type,
+        language,
+        max_tokens,
+        per_section_limit,
+        total_limit,
+        report_format,
+        report_save,
+        report_inline,
+        report_name or Path(path).stem,
+    )
 
-    resp = {
-        "source_path": str(p),
-        "original_bytes": len(raw.encode("utf-8", errors="ignore")),
-        "compact_bytes": len(compact.encode("utf-8", errors="ignore")),
-        "compact_preview": compact[:800],
-        "analysis": analysis
-    }
 
-    if (report_format or "").lower() == "html":
-        html_str = render_html(
-            meta={"source_path": str(p), "compact_preview": compact, "original_bytes": resp["original_bytes"], "compact_bytes": resp["compact_bytes"]},
-            analysis=analysis
-        )
-        if report_save:
-            out = save_report_html(html_str, report_name or Path(path).stem)
-            resp["report_path"] = out
-        if report_inline:
-            resp["report_html"] = html_str
+@router.post("/analyze_upload")
+async def analyze_upload(
+    file: UploadFile = File(..., description="Документ для анализа"),
+    jurisdiction: str = Form("RU"),
+    contract_type: str = Form("услуги"),
+    language: str = Form("ru"),
+    max_tokens: int = Form(600),
+    per_section_limit: int = Form(2200),
+    total_limit: int = Form(20000),
+    report_format: str | None = Form(None, description="html | null"),
+    report_save: bool = Form(False),
+    report_inline: bool = Form(False),
+    report_name: str | None = Form(None),
+):
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty upload")
 
-    return resp 
+    raw = _decode_bytes(data)
+    source_label = file.filename or "uploaded"
+
+    return await _analyze_raw_text(
+        raw,
+        source_label,
+        jurisdiction,
+        contract_type,
+        language,
+        max_tokens,
+        per_section_limit,
+        total_limit,
+        report_format,
+        report_save,
+        report_inline,
+        report_name or Path(source_label).stem,
+    )
 

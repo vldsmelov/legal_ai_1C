@@ -1,0 +1,17 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: legal-ai-backend
+    environment:
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      QDRANT_URL: http://host.docker.internal:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8087:8087"
+    volumes:
+      - ./corpus:/app/corpus:ro
+      - ./reports:/app/reports
+    restart: unless-stopped
