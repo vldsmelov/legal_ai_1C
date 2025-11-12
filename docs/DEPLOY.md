@@ -118,7 +118,7 @@ docker run --rm \
 
 - Проверить готовность: `curl http://127.0.0.1:8087/health`.
 - Основной анализ: `curl -X POST http://127.0.0.1:8087/analyze -H 'Content-Type: application/json' -d '{"contract_text":"..."}'`.
-- HTML-отчёт: `curl -X POST http://127.0.0.1:8087/doc/analyze_file -d '{"path":"samples/demo.txt","report_format":"html","report_inline":true}'`.
+- HTML-отчёт: `curl -X POST http://127.0.0.1:8087/doc/analyze_file -d '{"path":"samples/demo.txt","report_format":"html"}'`.
 - Индексацию корпуса выполняйте через внешние утилиты, напрямую обращаясь к Ollama за эмбеддингами и к Qdrant за операциями с коллекцией.
 
 ## 6. Обновление
