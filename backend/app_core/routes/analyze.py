@@ -409,7 +409,7 @@ async def _run_analysis(req: AnalyzeRequest, *, use_rag: bool) -> AnalyzeRespons
                 "step": step_counter,
                 "name": "rag_vector_search",
                 "description": "Поиск нормативных актов в Qdrant по вектору запроса",
-                "target_url": None,
+                "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
                 "method": "POST",
                 "status": "skipped",
                 "details": {
