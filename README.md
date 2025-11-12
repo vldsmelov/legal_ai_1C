@@ -130,8 +130,6 @@ Backend предполагает, что коллекция уже создан�
 {
   "contract_text": "...",
   "report_format": "html",
-  "report_save": true,
-  "report_inline": false,
   "report_name": "sample-report",
   "report_meta": {
     "source_path": "contracts/sample.txt",
@@ -142,9 +140,8 @@ Backend предполагает, что коллекция уже создан�
 }
 ```
 
-- `report_format: "html"` включает рендеринг.
-- `report_save: true` сохраняет файл в `REPORT_OUTPUT_DIR` (`./reports` по умолчанию) и возвращает `report_path`.
-- `report_inline: true` добавляет готовую вёрстку в ответ (`report_html`).
+- `report_format: "html"` включает рендеринг и сохраняет файл в `REPORT_OUTPUT_DIR` (`./reports` по умолчанию).
+- Ответ содержит поле `report_path` с абсолютным путём до созданного HTML.
 - `report_name` задаёт базовое имя файла; по умолчанию берётся из `source_path`/`source_url`.
 - `report_meta` позволяет передать служебные данные для заголовков отчёта.
 
@@ -168,8 +165,6 @@ curl -X POST http://localhost:8087/doc/analyze_file \
     "per_section_limit": 2200,
     "total_limit": 20000,
     "report_format": "html",
-    "report_save": false,
-    "report_inline": true,
     "report_name": "sample-report"
   }'
 ```
@@ -186,7 +181,7 @@ curl -X POST http://localhost:8087/doc/analyze_file \
 
   После этого запрос с `"path": "contract.docx"` найдёт файл внутри контейнера.
 - Параметры `max_tokens`, `per_section_limit`, `total_limit` управляют объёмом текста, передаваемого в `/analyze`.
-- Укажите `report_format: "html"` и `report_inline: true`, чтобы получить HTML прямо в ответе. Для сохранения на диск добавьте `report_save: true` (файл попадёт в `REPORT_OUTPUT_DIR`).
+- Укажите `report_format: "html"`, чтобы получить путь к сохранённому HTML. Файлы всегда записываются в `REPORT_OUTPUT_DIR`.
 
 ### Пример запроса с загрузкой файла (`/doc/analyze_upload`)
 
@@ -199,12 +194,11 @@ curl -X POST http://localhost:8087/doc/analyze_upload \
   -F 'contract_type=услуги' \
   -F 'language=ru' \
   -F 'max_tokens=600' \
-  -F 'report_format=html' \
-  -F 'report_inline=true'
+  -F 'report_format=html'
 ```
 
-- Формы `per_section_limit`, `total_limit`, `report_save`, `report_name` также можно передавать через `-F`.
-- Ответ содержит те же поля, что и `analyze_file`, включая HTML, если `report_inline=true`.
+- Формы `per_section_limit`, `total_limit`, `report_name` также можно передавать через `-F`.
+- Ответ содержит те же поля, что и `analyze_file`, включая `report_path` с адресом HTML-файла.
 
 ## Обзор API
 

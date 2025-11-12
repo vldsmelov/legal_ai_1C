@@ -21,10 +21,12 @@ class AnalyzeRequest(BaseModel):
         default=None, description="Формат итогового отчёта (например, 'html')"
     )
     report_save: bool = Field(
-        default=False, description="Сохранять ли итоговый отчёт на диск"
+        default=True,
+        description="[устарело] HTML всегда сохраняется в REPORT_OUTPUT_DIR",
     )
     report_inline: bool = Field(
-        default=False, description="Возвращать ли готовый отчёт в теле ответа"
+        default=False,
+        description="[устарело] HTML выдаётся только ссылкой (report_path)",
     )
     report_name: Optional[str] = Field(
         default=None, description="Базовое имя файла для сохранения отчёта"

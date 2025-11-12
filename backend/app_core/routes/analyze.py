@@ -312,10 +312,7 @@ async def analyze(req: AnalyzeRequest):
     if (req.report_format or "").lower() == "html":
         meta = _collect_report_meta(req)
         html_str = render_html(meta=meta, analysis=payload)
-        if req.report_save:
-            report_name = _resolve_report_name(req, meta)
-            payload["report_path"] = save_report_html(html_str, report_name)
-        if req.report_inline:
-            payload["report_html"] = html_str
+        report_name = _resolve_report_name(req, meta)
+        payload["report_path"] = save_report_html(html_str, report_name)
 
     return AnalyzeResponse(**payload)

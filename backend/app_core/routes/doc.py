@@ -98,8 +98,6 @@ async def _analyze_raw_text(
 
     if analysis.get("report_path"):
         resp["report_path"] = analysis["report_path"]
-    if analysis.get("report_html"):
-        resp["report_html"] = analysis["report_html"]
 
     return resp
 
@@ -224,10 +222,6 @@ async def _call_analyze(
     }
     if report_format:
         payload["report_format"] = report_format
-    if report_save is not None:
-        payload["report_save"] = report_save
-    if report_inline is not None:
-        payload["report_inline"] = report_inline
     if report_name:
         payload["report_name"] = report_name
     if report_meta:
@@ -256,8 +250,14 @@ async def analyze_file(
     per_section_limit: int = Body(2200, embed=True),
     total_limit: int = Body(20000, embed=True),
     report_format: str | None = Body(None, embed=True, description="html | null"),
-    report_save: bool = Body(False, embed=True),
-    report_inline: bool = Body(False, embed=True),
+    report_save: bool = Body(
+        True, embed=True, description="[устарело] HTML всегда сохраняется"
+    ),
+    report_inline: bool = Body(
+        False,
+        embed=True,
+        description="[устарело] HTML возвращается только ссылкой",
+    ),
     report_name: str | None = Body(None, embed=True),
 ):
     try:
@@ -293,8 +293,10 @@ async def analyze_upload(
     per_section_limit: int = Form(2200),
     total_limit: int = Form(20000),
     report_format: str | None = Form(None, description="html | null"),
-    report_save: bool = Form(False),
-    report_inline: bool = Form(False),
+    report_save: bool = Form(True, description="[устарело] HTML всегда сохраняется"),
+    report_inline: bool = Form(
+        False, description="[устарело] HTML возвращается только ссылкой"
+    ),
     report_name: str | None = Form(None),
 ):
     data = await file.read()
