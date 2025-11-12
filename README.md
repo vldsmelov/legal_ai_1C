@@ -62,6 +62,30 @@ docker run --rm \
 
 > На macOS/Windows параметр `--add-host` не требуется: `host.docker.internal` уже настроен Docker Desktop.
 
+## Запуск через Docker Compose
+
+В репозитории есть `docker-compose.yml`, который поднимает backend вместе с Ollama и Qdrant.
+
+```bash
+docker compose up -d
+```
+
+По умолчанию публикуются порты 8087 (backend), 11434 (Ollama) и 6333/6334 (Qdrant). Каталог `./corpus` подключается к backend в
+режиме чтения, а отчёты из сервиса сохраняются в локальную папку `./reports`.
+
+После первого запуска зайдите в контейнер Ollama и загрузите нужные модели:
+
+```bash
+docker compose exec ollama ollama pull krith/qwen2.5-32b-instruct:IQ4_XS
+docker compose exec ollama ollama pull BAAI/bge-m3
+```
+
+Остановка сервисов:
+
+```bash
+docker compose down
+```
+
 ## Основные переменные окружения
 
 | Переменная | Значение по умолчанию | Назначение |
