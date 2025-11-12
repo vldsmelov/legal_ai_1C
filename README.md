@@ -88,7 +88,7 @@ docker compose down
 | `OLLAMA_MODEL` | `krith/qwen2.5-32b-instruct:IQ4_XS` | Модель LLM |
 | `EMBEDDING_MODEL` | `BAAI/bge-m3` | Модель эмбеддингов (используется и для индексации, и для поиска) |
 | `QDRANT_URL` | `http://127.0.0.1:6333` | Базовый URL Qdrant |
-| `QDRANT_COLLECTION` | `ru_law_m3` | Коллекция с нормами права |
+| `QDRANT_COLLECTION` | `docs` | Коллекция с нормами права |
 | `RAG_TOP_K` | `8` | Количество контекстов, возвращаемых Qdrant |
 | `STARTUP_CHECKS` | `true` | Включить лёгкие проверки Ollama/Qdrant при запуске |
 | `SELF_CHECK_TIMEOUT` | `5` | Таймаут ожидания (секунды) при проверках |

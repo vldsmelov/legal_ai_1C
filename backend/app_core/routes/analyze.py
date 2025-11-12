@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -140,10 +140,15 @@ def _has_all_sections(payload: Dict[str, Any]) -> bool:
     return get_section_keys().issubset(keys)
 
 
-async def _call_business_model(req: AnalyzeRequest, max_tokens: int) -> Dict[str, Any]:
+async def _call_business_model(
+    req: AnalyzeRequest, max_tokens: int
+) -> Tuple[Dict[str, Any], str, Dict[str, Any], str, str]:
     biz_sys = business_system_prompt(req)
     biz_usr = business_user_prompt(req)
-    return await ollama_chat_json(biz_sys, biz_usr, req.model, max_tokens=max_tokens)
+    payload, raw_text, call_meta = await ollama_chat_json(
+        biz_sys, biz_usr, req.model, max_tokens=max_tokens
+    )
+    return payload, raw_text, call_meta, biz_sys, biz_usr
 
 
 def _ensure_section_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -199,7 +204,9 @@ def _ensure_section_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-async def _generate_business_payload(req: AnalyzeRequest) -> Dict[str, Any]:
+async def _generate_business_payload(
+    req: AnalyzeRequest,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     attempts: List[int] = []
     base = req.max_tokens or settings.BUSINESS_MAX_TOKENS
     attempts.append(max(base, 512))
@@ -207,15 +214,33 @@ async def _generate_business_payload(req: AnalyzeRequest) -> Dict[str, Any]:
     attempts.append(max(base + settings.BUSINESS_RETRY_STEP, base))
 
     last_payload: Dict[str, Any] = {}
-    for tokens in attempts:
+    debug_calls: List[Dict[str, Any]] = []
+    for attempt_idx, tokens in enumerate(attempts, start=1):
         try:
-            payload = await _call_business_model(req, tokens)
+            payload, raw_text, call_meta, biz_sys, biz_usr = await _call_business_model(
+                req, tokens
+            )
         except Exception:
             continue
+        debug_calls.append(
+            {
+                "kind": "business",
+                "attempt": attempt_idx,
+                "max_tokens": tokens,
+                "parsed_response": payload,
+                "system_prompt": biz_sys,
+                "user_prompt": biz_usr,
+                "raw_response": raw_text,
+                "endpoint": call_meta.get("endpoint"),
+                "endpoint_url": call_meta.get("url")
+                or f"{settings.OLLAMA_URL}/api/{call_meta.get('endpoint', 'chat')}",
+                "model": req.model or settings.OLLAMA_MODEL,
+            }
+        )
         if _has_all_sections(payload):
-            return _ensure_section_payload(payload)
+            return _ensure_section_payload(payload), debug_calls
         last_payload = payload or {}
-    return _ensure_section_payload(last_payload)
+    return _ensure_section_payload(last_payload), debug_calls
 
 
 def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]:
@@ -299,16 +324,74 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
     # 1) RAG — проверка по законодательству
+    rag_error: Dict[str, Any] | None = None
     try:
         ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
-    except Exception:
+    except Exception as exc:
         ctx = []
+        rag_error = {"error": str(exc)}
     ctx = dedup_sources_by_hash(ctx)
+    llm_calls: List[Dict[str, Any]] = []
+    pipeline: List[Dict[str, Any]] = []
+    step_counter = 1
+
+    pipeline.append(
+        {
+            "step": step_counter,
+            "name": "rag_vector_search",
+            "description": "Поиск нормативных актов в Qdrant по вектору запроса",
+            "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
+            "method": "POST",
+            "status": "error" if rag_error else ("ok" if ctx else "no_matches"),
+            "details": {
+                "top_k": settings.RAG_TOP_K,
+                "hits": len(ctx),
+                "collection": settings.QDRANT_COLLECTION,
+                "embedding_model": settings.EMBEDDING_MODEL,
+            },
+        }
+    )
+    if rag_error:
+        pipeline[-1]["details"].update(rag_error)
+    step_counter += 1
     # 2) LLM — юридическая оценка с контекстом RAG
     sys = law_system_prompt(req)
     usr = law_user_prompt(req, ctx)
+    law_tokens = req.max_tokens or 1024
     try:
-        law_parsed = await ollama_chat_json(sys, usr, req.model, max_tokens=req.max_tokens or 1024)
+        law_parsed, law_raw, law_meta = await ollama_chat_json(
+            sys, usr, req.model, max_tokens=law_tokens
+        )
+        llm_calls.append(
+            {
+                "kind": "law",
+                "system_prompt": sys,
+                "user_prompt": usr,
+                "raw_response": law_raw,
+                "parsed_response": law_parsed,
+                "endpoint": law_meta.get("endpoint"),
+                "endpoint_url": law_meta.get("url")
+                or f"{settings.OLLAMA_URL}/api/{law_meta.get('endpoint', 'chat')}",
+                "max_tokens": law_tokens,
+                "model": req.model or settings.OLLAMA_MODEL,
+            }
+        )
+        pipeline.append(
+            {
+                "step": step_counter,
+                "name": "law_llm_analysis",
+                "description": "Юридический анализ договора через Ollama",
+                "target_url": llm_calls[-1]["endpoint_url"],
+                "method": "POST",
+                "status": "ok",
+                "details": {
+                    "model": llm_calls[-1]["model"],
+                    "max_tokens": law_tokens,
+                    "endpoint": llm_calls[-1]["endpoint"],
+                },
+            }
+        )
+        step_counter += 1
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
 
@@ -316,19 +399,72 @@ async def analyze(req: AnalyzeRequest):
 
     # 3) LLM — бизнес-риски без RAG
     try:
-        business_parsed = await _generate_business_payload(req)
+        business_parsed, business_debug = await _generate_business_payload(req)
+        llm_calls.extend(business_debug)
+        for call in business_debug:
+            pipeline.append(
+                {
+                    "step": step_counter,
+                    "name": "business_llm_analysis",
+                    "description": "Оценка бизнес-рисков через Ollama",
+                    "target_url": call.get("endpoint_url")
+                    or f"{settings.OLLAMA_URL}/api/{call.get('endpoint', 'chat')}",
+                    "method": "POST",
+                    "status": "ok" if call.get("parsed_response") else "empty",
+                    "details": {
+                        "model": call.get("model"),
+                        "max_tokens": call.get("max_tokens"),
+                        "attempt": call.get("attempt"),
+                        "endpoint": call.get("endpoint"),
+                    },
+                }
+            )
+            step_counter += 1
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ollama error: {e}")
 
     business_report = build_report(business_parsed, DEFAULT_BUSINESS_SUMMARY)
 
+    overview_sys = overview_system_prompt(req)
+    overview_usr = overview_user_prompt(req)
+    overview_tokens = min(req.max_tokens or 600, 600)
     try:
-        overview_raw = await ollama_chat_json(
-            overview_system_prompt(req),
-            overview_user_prompt(req),
+        overview_raw, overview_raw_text, overview_meta = await ollama_chat_json(
+            overview_sys,
+            overview_usr,
             req.model,
-            max_tokens=min(req.max_tokens or 600, 600),
+            max_tokens=overview_tokens,
         )
+        llm_calls.append(
+            {
+                "kind": "overview",
+                "system_prompt": overview_sys,
+                "user_prompt": overview_usr,
+                "raw_response": overview_raw_text,
+                "parsed_response": overview_raw,
+                "endpoint": overview_meta.get("endpoint"),
+                "endpoint_url": overview_meta.get("url")
+                or f"{settings.OLLAMA_URL}/api/{overview_meta.get('endpoint', 'chat')}",
+                "max_tokens": overview_tokens,
+                "model": req.model or settings.OLLAMA_MODEL,
+            }
+        )
+        pipeline.append(
+            {
+                "step": step_counter,
+                "name": "overview_llm_summary",
+                "description": "Генерация обзорного резюме документа через Ollama",
+                "target_url": llm_calls[-1]["endpoint_url"],
+                "method": "POST",
+                "status": "ok",
+                "details": {
+                    "model": llm_calls[-1]["model"],
+                    "max_tokens": overview_tokens,
+                    "endpoint": llm_calls[-1]["endpoint"],
+                },
+            }
+        )
+        step_counter += 1
     except Exception:
         overview_raw = {}
     overview = build_document_overview(overview_raw)
@@ -360,6 +496,8 @@ async def analyze(req: AnalyzeRequest):
         "overview": overview,
         "law_narrative": law_narrative,
         "business_narrative": business_narrative,
+        "llm_calls": llm_calls,
+        "pipeline": pipeline,
     }
 
     if (req.report_format or "").lower() == "html":
