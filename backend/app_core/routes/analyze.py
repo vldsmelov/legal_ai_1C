@@ -371,38 +371,56 @@ def build_report(parsed: Dict[str, Any], default_summary: str) -> Dict[str, Any]
     }
 
 
-@router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(req: AnalyzeRequest):
-    # 1) RAG — проверка по законодательству
-    rag_error: Dict[str, Any] | None = None
-    try:
-        ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
-    except Exception as exc:
-        ctx = []
-        rag_error = {"error": str(exc)}
-    ctx = dedup_sources_by_hash(ctx)
+async def _run_analysis(req: AnalyzeRequest, *, use_rag: bool) -> AnalyzeResponse:
     llm_calls: List[Dict[str, Any]] = []
     pipeline: List[Dict[str, Any]] = []
     step_counter = 1
 
-    pipeline.append(
-        {
-            "step": step_counter,
-            "name": "rag_vector_search",
-            "description": "Поиск нормативных актов в Qdrant по вектору запроса",
-            "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
-            "method": "POST",
-            "status": "error" if rag_error else ("ok" if ctx else "no_matches"),
-            "details": {
-                "top_k": settings.RAG_TOP_K,
-                "hits": len(ctx),
-                "collection": settings.QDRANT_COLLECTION,
-                "embedding_model": settings.EMBEDDING_MODEL,
-            },
-        }
-    )
-    if rag_error:
-        pipeline[-1]["details"].update(rag_error)
+    ctx: List[SourceItem] = []
+    if use_rag:
+        rag_error: Dict[str, Any] | None = None
+        try:
+            ctx = rag_search_ru(req.contract_text, top_k=settings.RAG_TOP_K)
+        except Exception as exc:
+            ctx = []
+            rag_error = {"error": str(exc)}
+        ctx = dedup_sources_by_hash(ctx)
+        pipeline.append(
+            {
+                "step": step_counter,
+                "name": "rag_vector_search",
+                "description": "Поиск нормативных актов в Qdrant по вектору запроса",
+                "target_url": f"{settings.QDRANT_URL}/collections/{settings.QDRANT_COLLECTION}/points/search",
+                "method": "POST",
+                "status": "error" if rag_error else ("ok" if ctx else "no_matches"),
+                "details": {
+                    "top_k": settings.RAG_TOP_K,
+                    "hits": len(ctx),
+                    "collection": settings.QDRANT_COLLECTION,
+                    "embedding_model": settings.EMBEDDING_MODEL,
+                },
+            }
+        )
+        if rag_error:
+            pipeline[-1]["details"].update(rag_error)
+    else:
+        pipeline.append(
+            {
+                "step": step_counter,
+                "name": "rag_vector_search",
+                "description": "Поиск нормативных актов в Qdrant по вектору запроса",
+                "target_url": None,
+                "method": "POST",
+                "status": "skipped",
+                "details": {
+                    "top_k": 0,
+                    "hits": 0,
+                    "collection": settings.QDRANT_COLLECTION,
+                    "embedding_model": settings.EMBEDDING_MODEL,
+                    "reason": "rag_disabled",
+                },
+            }
+        )
     step_counter += 1
     # 2) LLM — юридическая оценка с контекстом RAG
     try:
@@ -545,3 +563,13 @@ async def analyze(req: AnalyzeRequest):
         payload["report_path"] = save_report_html(html_str, report_name)
 
     return AnalyzeResponse(**payload)
+
+
+@router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze(req: AnalyzeRequest):
+    return await _run_analysis(req, use_rag=True)
+
+
+@router.post("/analyze_llm", response_model=AnalyzeResponse)
+async def analyze_llm(req: AnalyzeRequest):
+    return await _run_analysis(req, use_rag=False)
