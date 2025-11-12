@@ -1,4 +1,6 @@
 from typing import List, Dict, Any
+from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException
 
@@ -17,6 +19,7 @@ from ..scoring import (
 )
 from ..utils import dedup_sources_by_hash
 from ..report.summary import build_document_overview, summarize_report_block
+from ..report.render import render_html, save_report_html
 
 router = APIRouter()
 
@@ -26,6 +29,44 @@ DEFAULT_LAW_SUMMARY = (
 DEFAULT_BUSINESS_SUMMARY = (
     "Автоматическая оценка бизнес-логики и рисков для компании; результаты стоит перепроверить специалистами."
 )
+
+
+def _collect_report_meta(req: AnalyzeRequest) -> Dict[str, Any]:
+    base = req.report_meta.dict() if req.report_meta else {}
+    preview = base.get("compact_preview") or req.contract_text[:800]
+    original_bytes = base.get("original_bytes") if base else None
+    if original_bytes is None:
+        original_bytes = len(req.contract_text.encode("utf-8", errors="ignore"))
+    compact_bytes = base.get("compact_bytes") if base else None
+    if compact_bytes is None:
+        compact_bytes = original_bytes
+    return {
+        "source_path": base.get("source_path"),
+        "source_url": base.get("source_url"),
+        "compact_preview": preview,
+        "original_bytes": original_bytes,
+        "compact_bytes": compact_bytes,
+    }
+
+
+def _resolve_report_name(req: AnalyzeRequest, meta: Dict[str, Any]) -> str:
+    if req.report_name:
+        return req.report_name
+    source_path = meta.get("source_path")
+    if source_path:
+        stem = Path(source_path).stem
+        if stem:
+            return stem
+    source_url = meta.get("source_url")
+    if source_url:
+        parsed = urlparse(source_url)
+        if parsed.path:
+            stem = Path(parsed.path).stem
+            if stem:
+                return stem
+        if parsed.netloc:
+            return parsed.netloc.replace(":", "_")
+    return "report"
 
 
 def law_system_prompt(req: AnalyzeRequest) -> str:
@@ -242,28 +283,39 @@ async def analyze(req: AnalyzeRequest):
     law_narrative = summarize_report_block(law_report, "Соответствие законодательству")
     business_narrative = summarize_report_block(business_report, "Бизнес-риски и логика сделки")
 
-    return AnalyzeResponse(
-        score_total=law_report["score_total"],
-        score_text=law_report["score_text"],
-        verdict=law_report["verdict"],
-        risk_color=law_report["risk_color"],
-        summary=law_report["summary"],
-        focus_summary=law_report["focus_summary"],
-        top_focus=law_report["top_focus"],
-        jurisdiction=req.jurisdiction,
-        issues=law_report["issues"],
-        section_scores=law_report["section_scores"],
-        sources=ctx,
-        business_score_total=business_report["score_total"],
-        business_score_text=business_report["score_text"],
-        business_verdict=business_report["verdict"],
-        business_risk_color=business_report["risk_color"],
-        business_summary=business_report["summary"],
-        business_focus_summary=business_report["focus_summary"],
-        business_top_focus=business_report["top_focus"],
-        business_issues=business_report["issues"],
-        business_section_scores=business_report["section_scores"],
-        overview=overview,
-        law_narrative=law_narrative,
-        business_narrative=business_narrative,
-    )
+    payload: Dict[str, Any] = {
+        "score_total": law_report["score_total"],
+        "score_text": law_report["score_text"],
+        "verdict": law_report["verdict"],
+        "risk_color": law_report["risk_color"],
+        "summary": law_report["summary"],
+        "focus_summary": law_report["focus_summary"],
+        "top_focus": law_report["top_focus"],
+        "jurisdiction": req.jurisdiction,
+        "issues": law_report["issues"],
+        "section_scores": law_report["section_scores"],
+        "sources": ctx,
+        "business_score_total": business_report["score_total"],
+        "business_score_text": business_report["score_text"],
+        "business_verdict": business_report["verdict"],
+        "business_risk_color": business_report["risk_color"],
+        "business_summary": business_report["summary"],
+        "business_focus_summary": business_report["focus_summary"],
+        "business_top_focus": business_report["top_focus"],
+        "business_issues": business_report["issues"],
+        "business_section_scores": business_report["section_scores"],
+        "overview": overview,
+        "law_narrative": law_narrative,
+        "business_narrative": business_narrative,
+    }
+
+    if (req.report_format or "").lower() == "html":
+        meta = _collect_report_meta(req)
+        html_str = render_html(meta=meta, analysis=payload)
+        if req.report_save:
+            report_name = _resolve_report_name(req, meta)
+            payload["report_path"] = save_report_html(html_str, report_name)
+        if req.report_inline:
+            payload["report_html"] = html_str
+
+    return AnalyzeResponse(**payload)

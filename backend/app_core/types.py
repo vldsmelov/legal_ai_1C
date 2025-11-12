@@ -1,6 +1,14 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
+class ReportMeta(BaseModel):
+    source_path: Optional[str] = None
+    source_url: Optional[str] = None
+    compact_preview: Optional[str] = None
+    original_bytes: Optional[int] = None
+    compact_bytes: Optional[int] = None
+
+
 class AnalyzeRequest(BaseModel):
     contract_text: str = Field(..., description="Текст договора/выдержки")
     jurisdiction: str = Field("RU")
@@ -9,6 +17,21 @@ class AnalyzeRequest(BaseModel):
     effective_date: Optional[str] = None
     model: Optional[str] = None
     max_tokens: Optional[int] = 1024
+    report_format: Optional[str] = Field(
+        default=None, description="Формат итогового отчёта (например, 'html')"
+    )
+    report_save: bool = Field(
+        default=False, description="Сохранять ли итоговый отчёт на диск"
+    )
+    report_inline: bool = Field(
+        default=False, description="Возвращать ли готовый отчёт в теле ответа"
+    )
+    report_name: Optional[str] = Field(
+        default=None, description="Базовое имя файла для сохранения отчёта"
+    )
+    report_meta: Optional[ReportMeta] = Field(
+        default=None, description="Дополнительные данные для генерации отчёта"
+    )
 
 # Internal
 class SectionScore(BaseModel):
@@ -80,6 +103,12 @@ class AnalyzeResponse(BaseModel):
     overview: DocumentOverview
     law_narrative: NarrativeBlock
     business_narrative: NarrativeBlock
+    report_path: Optional[str] = Field(
+        default=None, description="Полный путь до сохранённого HTML-отчёта"
+    )
+    report_html: Optional[str] = Field(
+        default=None, description="Готовая HTML-вёрстка, если запрошен inline-ответ"
+    )
 
 # Ingest
 class IngestItem(BaseModel):
