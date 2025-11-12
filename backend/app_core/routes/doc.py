@@ -63,6 +63,7 @@ async def _analyze_raw_text(
     report_save: bool,
     report_inline: bool,
     report_name: str | None,
+    use_rag: bool,
 ):
     sections = extract_sections(raw)
     compact = build_compact(
@@ -80,6 +81,7 @@ async def _analyze_raw_text(
         report_save,
         report_inline,
         report_name,
+        use_rag,
         {
             "source_path": source_label,
             "compact_preview": compact,
@@ -211,6 +213,7 @@ async def _call_analyze(
     report_save: bool,
     report_inline: bool,
     report_name: str | None,
+    use_rag: bool,
     report_meta: Optional[Dict[str, Any]] = None,
 ) -> dict:
     payload: Dict[str, Any] = {
@@ -229,7 +232,8 @@ async def _call_analyze(
     # Большой таймаут на чтение/запись для больших документов
     timeout = httpx.Timeout(connect=5.0, read=300.0, write=300.0, pool=300.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post("http://127.0.0.1:8087/analyze", json=payload)
+        endpoint = "analyze" if use_rag else "analyze_llm"
+        r = await client.post(f"http://127.0.0.1:8087/{endpoint}", json=payload)
         r.raise_for_status()
         return r.json()
 
@@ -259,6 +263,7 @@ async def analyze_file(
         description="[устарело] HTML возвращается только ссылкой",
     ),
     report_name: str | None = Body(None, embed=True),
+    use_rag: bool = Body(True, embed=True),
 ):
     try:
         p = resolve_under(LOCAL_FILES_BASE, path)
@@ -280,6 +285,7 @@ async def analyze_file(
         report_save,
         report_inline,
         report_name or Path(path).stem,
+        use_rag,
     )
 
 
@@ -298,6 +304,7 @@ async def analyze_upload(
         False, description="[устарело] HTML возвращается только ссылкой"
     ),
     report_name: str | None = Form(None),
+    use_rag: bool = Form(True),
 ):
     data = await file.read()
     if not data:
@@ -319,5 +326,6 @@ async def analyze_upload(
         report_save,
         report_inline,
         report_name or Path(source_label).stem,
+        use_rag,
     )
 
